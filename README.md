@@ -32,6 +32,18 @@ Handig om te weten:
 - Koppen, citaten en opsommingen worden herkend en als Markdown opgeslagen (`##`, `>`, `-`). Een grote beginletter (initiaal) wordt apart herkend en weer voor het woord gezet.
 - Een niet-opgeslagen scan blijft bewaard, ook als je de app sluit.
 
+## Lampmodus (telefoon boven het boek)
+
+Voor een vaste opstelling, bijvoorbeeld met de telefoon via MagSafe op een bureaulamp boven het boek. Open **Lampmodus** onderaan het beginscherm (of `lamp.html`).
+
+1. Leg de telefoon **liggend** op de lamp, met de lens vrij over de rand. De dubbele pagina moet bijna de hele breedte van het beeld vullen.
+2. Zet **Automatisch slot** op **Nooit** (Instellingen › Scherm en helderheid). De app vraagt zelf ook om het scherm aan te houden.
+3. Tik op **Camera starten**. Linksboven staat de resolutie; groen betekent 4K.
+4. Blader om en houd stil. Na ongeveer een seconde stilstand volgt een piep en een flits: de opname is gemaakt. Een hand die stil op de rand ligt is geen probleem. Stilhouden zonder om te slaan geeft geen dubbele opname.
+5. Bij **Opnames** zie je alles terug. **Alles delen** stuurt de foto's via AirDrop naar je computer.
+
+Dit is fase 1 van de opstelling met bediening vanaf de computer. In een volgende stap komen de opnames rechtstreeks op de computer binnen.
+
 ## Exporteren en back-up
 
 - **Exporteren** (bij Pagina's): de hele tekst of één hoofdstuk als Markdown-bestand (`.md`). Via het deelmenu kun je het bewaren in Bestanden/iCloud Drive of openen in een notitie-app. **Kopiëren** zet de tekst op het klembord.

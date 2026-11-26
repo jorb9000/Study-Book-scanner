@@ -284,6 +284,7 @@ async function viewHome() {
     </section>
     <footer class="dock">
       <a class="btn btn-primary btn-block" href="#/nieuw">${icon('plus')} Nieuw boek</a>
+      <a class="btn btn-quiet btn-block" href="lamp.html">${icon('camera')} Lampmodus (telefoon boven het boek)</a>
     </footer>
   `);
 }
