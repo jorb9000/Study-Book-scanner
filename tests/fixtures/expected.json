@@ -1,0 +1,53 @@
+{
+ "flat": {
+  "words": "Een Sumatraanse tijger aan de muur Over mijn fascinatie voor Nederlands-Indië B oven mijn jongensbed hing een Sumatraanse tijger. Volgens de familie was het dier ooit na een heroïsche klopjacht door het oerwoud geveld door mijn grootvader, die als jonge kerel in 1911 van Den Bosch op goed geluk naar Indië was vertrokken. Daar vond hij een betrekking bij de Bataafsche Petroleum Maatschappij, eerst in de boekhouding op Pangkalan Brandan aan de noordoostkust van Sumatra, daarna als magazijnmedewerker bij de raffinaderij in Palembang. Na enkele jaren trouwde hij een zeventienjarig meisje van gemengde afkomst, later mijn lievelingsgrootmoeder. Of mijn opa werkelijk in de wildernis op een tijger heeft gejaagd, weet ik niet. ‘Een man van onbesproken karakter, die de leiding van een middelgrote plaats aan zou kunnen.’ In elk geval hing de huid van het roofdier aan de muur gespijkerd boven de plek waar ik sliep. De taxidermist had het vel aan de achterzijde met jute bekleed. Zijn poten, met dodelijke, brede klauwen, strekten zich stervormig uit over de hele wand van mijn jongenskamer. Niet ver boven mijn hoofd zag ik, ook in het donker van de nacht, schaars verlicht door binnenvallende maneschijn, de opengesperde muil van het beest, de vergeelde hoektanden, rood opgeschilderde tong en groene glazen ogen die mij indringend leken aan te staren. Een sprong naar zijn prooi, een jongen in een bed, maar bevroren in de tijd. Mijn grootmoeder was heel belangrijk voor me. Een deel van mijn jeugd bracht ik in haar nabijheid door. Ik hield enorm veel van haar. Mijn hartstocht voor Nederlands-Indië, denk ik wel eens, heb ik aan haar te danken. 11",
+  "minRecall": 95,
+  "contains": [
+   "## Een Sumatraanse tijger aan de muur",
+   "Boven mijn jongensbed",
+   "> ‘Een man van onbesproken"
+  ]
+ },
+ "skew": {
+  "words": "Een Sumatraanse tijger aan de muur Over mijn fascinatie voor Nederlands-Indië B oven mijn jongensbed hing een Sumatraanse tijger. Volgens de familie was het dier ooit na een heroïsche klopjacht door het oerwoud geveld door mijn grootvader, die als jonge kerel in 1911 van Den Bosch op goed geluk naar Indië was vertrokken. Daar vond hij een betrekking bij de Bataafsche Petroleum Maatschappij, eerst in de boekhouding op Pangkalan Brandan aan de noordoostkust van Sumatra, daarna als magazijnmedewerker bij de raffinaderij in Palembang. Na enkele jaren trouwde hij een zeventienjarig meisje van gemengde afkomst, later mijn lievelingsgrootmoeder. Of mijn opa werkelijk in de wildernis op een tijger heeft gejaagd, weet ik niet. ‘Een man van onbesproken karakter, die de leiding van een middelgrote plaats aan zou kunnen.’ In elk geval hing de huid van het roofdier aan de muur gespijkerd boven de plek waar ik sliep. De taxidermist had het vel aan de achterzijde met jute bekleed. Zijn poten, met dodelijke, brede klauwen, strekten zich stervormig uit over de hele wand van mijn jongenskamer. Niet ver boven mijn hoofd zag ik, ook in het donker van de nacht, schaars verlicht door binnenvallende maneschijn, de opengesperde muil van het beest, de vergeelde hoektanden, rood opgeschilderde tong en groene glazen ogen die mij indringend leken aan te staren. Een sprong naar zijn prooi, een jongen in een bed, maar bevroren in de tijd. Mijn grootmoeder was heel belangrijk voor me. Een deel van mijn jeugd bracht ik in haar nabijheid door. Ik hield enorm veel van haar. Mijn hartstocht voor Nederlands-Indië, denk ik wel eens, heb ik aan haar te danken. 11",
+  "minRecall": 95,
+  "contains": [
+   "## Een Sumatraanse tijger aan de muur",
+   "Boven mijn jongensbed",
+   "familie was"
+  ]
+ },
+ "bulge": {
+  "words": "Een Sumatraanse tijger aan de muur Over mijn fascinatie voor Nederlands-Indië B oven mijn jongensbed hing een Sumatraanse tijger. Volgens de familie was het dier ooit na een heroïsche klopjacht door het oerwoud geveld door mijn grootvader, die als jonge kerel in 1911 van Den Bosch op goed geluk naar Indië was vertrokken. Daar vond hij een betrekking bij de Bataafsche Petroleum Maatschappij, eerst in de boekhouding op Pangkalan Brandan aan de noordoostkust van Sumatra, daarna als magazijnmedewerker bij de raffinaderij in Palembang. Na enkele jaren trouwde hij een zeventienjarig meisje van gemengde afkomst, later mijn lievelingsgrootmoeder. Of mijn opa werkelijk in de wildernis op een tijger heeft gejaagd, weet ik niet. ‘Een man van onbesproken karakter, die de leiding van een middelgrote plaats aan zou kunnen.’ In elk geval hing de huid van het roofdier aan de muur gespijkerd boven de plek waar ik sliep. De taxidermist had het vel aan de achterzijde met jute bekleed. Zijn poten, met dodelijke, brede klauwen, strekten zich stervormig uit over de hele wand van mijn jongenskamer. Niet ver boven mijn hoofd zag ik, ook in het donker van de nacht, schaars verlicht door binnenvallende maneschijn, de opengesperde muil van het beest, de vergeelde hoektanden, rood opgeschilderde tong en groene glazen ogen die mij indringend leken aan te staren. Een sprong naar zijn prooi, een jongen in een bed, maar bevroren in de tijd. Mijn grootmoeder was heel belangrijk voor me. Een deel van mijn jeugd bracht ik in haar nabijheid door. Ik hield enorm veel van haar. Mijn hartstocht voor Nederlands-Indië, denk ik wel eens, heb ik aan haar te danken. 11",
+  "minRecall": 95,
+  "contains": [
+   "## Een Sumatraanse tijger aan de muur",
+   "Boven mijn jongensbed",
+   "familie was"
+  ]
+ },
+ "cover": {
+  "words": "Peter van Dongen DE TIJGER AAN DE MUUR Herinneringen aan Nederlands-Indië Uitgeverij Atlas",
+  "minRecall": 90,
+  "contains": [
+   "TIJGER"
+  ]
+ },
+ "bulge-rand": {
+  "words": "Een Sumatraanse tijger aan de muur Over mijn fascinatie voor Nederlands-Indië B oven mijn jongensbed hing een Sumatraanse tijger. Volgens de familie was het dier ooit na een heroïsche klopjacht door het oerwoud geveld door mijn grootvader, die als jonge kerel in 1911 van Den Bosch op goed geluk naar Indië was vertrokken. Daar vond hij een betrekking bij de Bataafsche Petroleum Maatschappij, eerst in de boekhouding op Pangkalan Brandan aan de noordoostkust van Sumatra, daarna als magazijnmedewerker bij de raffinaderij in Palembang. Na enkele jaren trouwde hij een zeventienjarig meisje van gemengde afkomst, later mijn lievelingsgrootmoeder. Of mijn opa werkelijk in de wildernis op een tijger heeft gejaagd, weet ik niet. ‘Een man van onbesproken karakter, die de leiding van een middelgrote plaats aan zou kunnen.’ In elk geval hing de huid van het roofdier aan de muur gespijkerd boven de plek waar ik sliep. De taxidermist had het vel aan de achterzijde met jute bekleed. Zijn poten, met dodelijke, brede klauwen, strekten zich stervormig uit over de hele wand van mijn jongenskamer. Niet ver boven mijn hoofd zag ik, ook in het donker van de nacht, schaars verlicht door binnenvallende maneschijn, de opengesperde muil van het beest, de vergeelde hoektanden, rood opgeschilderde tong en groene glazen ogen die mij indringend leken aan te staren. Een sprong naar zijn prooi, een jongen in een bed, maar bevroren in de tijd. Mijn grootmoeder was heel belangrijk voor me. Een deel van mijn jeugd bracht ik in haar nabijheid door. Ik hield enorm veel van haar. Mijn hartstocht voor Nederlands-Indië, denk ik wel eens, heb ik aan haar te danken. 11",
+  "minRecall": 85,
+  "contains": [
+   "## Een Sumatraanse tijger aan de muur"
+  ]
+ },
+ "studie": {
+  "words": "3.2 Het werkgeheugen Het werkgeheugen houdt informatie korte tijd vast terwijl je ermee bezig bent. Baddeley en Hitch beschreven in 1974 een model met meerdere onderdelen. Elk onderdeel heeft een eigen taak en een beperkte capaciteit. De fonologische lus bewaart klanken en woorden. Het visueel-ruimtelijk schetsblok bewaart beelden. De centrale verwerker verdeelt de aandacht. Capaciteit Hoeveel past er in het werkgeheugen? Miller kwam uit op ongeveer zeven eenheden, latere onderzoekers houden het eerder op vier. Je kunt de capaciteit vergroten door informatie te groeperen. Kader 3.1 Onthouden door groeperen Een telefoonnummer onthoud je makkelijker in blokjes van twee of drie cijfers dan als één lange reeks. Lees de reeks één keer hardop. Verdeel de reeks in blokjes. Herhaal de blokjes in gedachten.",
+  "minRecall": 95,
+  "contains": [
+   "## 3.2 Het werkgeheugen",
+   "- De fonologische",
+   "### Capaciteit",
+   "1. Lees de reeks"
+  ]
+ }
+}

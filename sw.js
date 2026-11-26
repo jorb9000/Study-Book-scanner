@@ -1,9 +1,9 @@
 /* Offline: app-bestanden vooraf, tekstherkenning bij eerste gebruik. */
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL = `boekscanner-shell-${VERSION}`;
 const OCR = 'boekscanner-ocr-v1';
 const FILES = [
-  './', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest',
+  './', 'index.html', 'style.css', 'app.js', 'ocr.js', 'scan.js', 'manifest.webmanifest',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
   'vendor/tesseract/tesseract.min.js', 'vendor/tesseract/worker.min.js',
 ];

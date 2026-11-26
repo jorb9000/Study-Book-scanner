@@ -7,6 +7,10 @@
 - Voortgang: aantal/totaal, ontbrekende pagina's (klikbaar), volgende pagina instelbaar, slim doorspringen naar de eerstvolgende ongescande pagina
 - Hoofdstukken als startpagina-markeringen; export per hoofdstuk of heel boek (Markdown, deelmenu/download, kopiëren)
 - OCR: belichting gelijkmatig maken vóór herkenning, regels opbouwen met zekerheid per woord, randruis en paginanummers/koppen weglaten, alinea's en afgebroken woorden herstellen, gedraaide foto's automatisch herkennen
+- Voorbewerking (scan.js): pagina vinden en perspectief rechtzetten, scheefstand, kromme regels rechttrekken (opbollende pagina), donkere randen en kaderlijnen weg, lichte tekst op donker (omslag) via omgekeerde poging
+- Grote beginletters (initialen) apart herkend en voor het eerste woord gezet
+- Opmaak naar Markdown: koppen (## / ###, ook over twee regels), ondertitel cursief, citaten (>), opsommingen (- en 1.); hoofdstuktitel niet dubbel in de export
+- Testfoto's + testscript: `node tests/run-ocr-tests.mjs`
 - Back-up/terugzetten (JSON, zonder foto's), persistente opslag aangevraagd
 - iOS: camera altijd direct vanuit een tik geopend; knoppenbalk verborgen tijdens typen
 
@@ -18,4 +22,4 @@
 
 ## Nog niet gedaan
 - Publicatie op GitHub Pages (wacht op een repository)
-- Test op een echte iPhone
+- Test op een echte iPhone (eerste test gedaan; nu opnieuw testen met de verbeterde herkenning)

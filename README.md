@@ -28,6 +28,8 @@ Handig om te weten:
 - Bij **Nog niet gescand** zie je welke pagina's ontbreken. Tik erop om daar verder te gaan.
 - **Hoofdstukken** zijn optioneel: geef aan op welke pagina een hoofdstuk begint, dan kun je per hoofdstuk exporteren.
 - Ligt de foto gedraaid, dan probeert de app zelf de juiste richting. Lukt dat niet, gebruik dan **Draaien**.
+- Een iets schuine foto of een pagina die bij de rug opbolt is geen probleem: de app zoekt de pagina, zet hem recht en trekt kromme regels recht. Zorg wel dat de hele pagina in beeld is, met wat tafel eromheen.
+- Koppen, citaten en opsommingen worden herkend en als Markdown opgeslagen (`##`, `>`, `-`). Een grote beginletter (initiaal) wordt apart herkend en weer voor het woord gezet.
 - Een niet-opgeslagen scan blijft bewaard, ook als je de app sluit.
 
 ## Exporteren en back-up
@@ -49,9 +51,13 @@ Gewone HTML, CSS en JavaScript, zonder build-stap.
 | Bestand | Wat |
 |---|---|
 | `index.html` | De pagina |
-| `app.js` | Alle logica: opslag (IndexedDB), schermen, scannen, export |
+| `app.js` | Opslag (IndexedDB), schermen, scannen, export |
+| `scan.js` | Voorbewerking van de foto: pagina vinden, perspectief, scheefstand, kromme regels, kaderlijnen, grote beginletters |
+| `ocr.js` | Tekstherkenning en het opbouwen van de Markdown (alinea's, koppen, citaten, opsommingen) |
 | `style.css` | Vormgeving (licht en donker) |
 | `sw.js` | Offline werken |
 | `vendor/` | Tesseract.js (tekstherkenning, Apache-2.0) met Nederlandse en Engelse taaldata |
 
 Lokaal testen: `python3 -m http.server 8080` in deze map, en dan naar `http://localhost:8080` gaan.
+
+Tekstherkenning testen: `node tests/run-ocr-tests.mjs` (Node en Playwright nodig). Dit herkent de testfoto's in `tests/fixtures` (scheef, opbollende pagina, omslag, studieboek met kader en opsommingen) en controleert de woorden en de opmaak. De uitvoer komt in `tests/out/`.

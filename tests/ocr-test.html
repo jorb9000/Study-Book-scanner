@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="nl"><head><meta charset="utf-8"><title>OCR-test</title></head>
+<body>
+<p>Testpagina voor de tekstherkenning. Wordt gebruikt door <code>tests/run-ocr-tests.mjs</code>.</p>
+<script src="../vendor/tesseract/tesseract.min.js"></script>
+<script type="module">
+  import { ocr, prepareForOcr } from '../ocr.js';
+  window.runOcr = async (url, lang = 'nld') => {
+    const blob = await (await fetch(url)).blob();
+    const t = performance.now();
+    let res;
+    try { res = await ocr.recognize(blob, lang); }
+    catch (e) { throw new Error('Herkenning mislukt: ' + (e?.stack || e?.message || JSON.stringify(e) || String(e))); }
+    return { ...res, ms: Math.round(performance.now() - t) };
+  };
+  window.prepared = async (url) => {
+    const blob = await (await fetch(url)).blob();
+    const c = await prepareForOcr(blob);
+    return (c.canvas || c).toDataURL('image/jpeg', 0.85);
+  };
+  window.ready = true;
+</script>
+</body></html>
