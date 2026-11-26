@@ -1,6 +1,8 @@
 /* Boekscanner — scan een boek in delen, met voortgang per boek.
    Alles blijft lokaal op het toestel (IndexedDB). Geen build-stap nodig. */
 
+import { ocr, resizeToBlob } from './ocr.js';
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const app = $('#app');
 const cameraInput = $('#camera');
@@ -162,185 +164,6 @@ function chapterRanges(book) {
   const chs = [...(book.chapters || [])].sort((a, b) => a.start - b.start);
   return chs.map((c, i) => ({ ...c, end: chs[i + 1] ? chs[i + 1].start - 1 : (book.totalPages || Infinity) }));
 }
-
-/* ---------- Tekst opbouwen ---------- */
-
-const isPageNum = (t) => /^\s*[-–—]?\s*(\d{1,4}|[ivxlc]{1,6})\s*[-–—]?\s*$/i.test(t);
-const median = (a) => { const b = [...a].sort((x, y) => x - y); return b.length ? b[b.length >> 1] : 0; };
-
-/** Bouwt nette alinea's uit de regels die Tesseract vindt, en laat randruis weg. */
-function buildText(blocks) {
-  const lines = [];
-  for (const b of blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || []) {
-    let w = (l.words || []).filter(x => x.text && x.text.trim());
-    const junk = (x) => x.confidence < 55 || (!/[\p{L}\p{N}]/u.test(x.text) && x.confidence < 85);
-    while (w.length && junk(w[0])) w.shift();
-    while (w.length && junk(w[w.length - 1])) w.pop();
-    if (!w.length) continue;
-    const conf = w.reduce((a, x) => a + x.confidence, 0) / w.length;
-    const letters = w.map(x => x.text).join('').replace(/[^\p{L}]/gu, '').length;
-    if (conf < 50 || (w.length <= 2 && conf < 70 && !isPageNum(w.map(x => x.text).join(' ')))) continue;
-    if (letters === 0 && !isPageNum(w.map(x => x.text).join(' '))) continue;
-    lines.push({
-      text: w.map(x => x.text).join(' '),
-      x0: w[0].bbox.x0, x1: w[w.length - 1].bbox.x1,
-      y0: Math.min(...w.map(x => x.bbox.y0)), y1: Math.max(...w.map(x => x.bbox.y1)),
-    });
-  }
-  // Kopregel bovenaan in hoofdletters (bv. "3 · GEHEUGEN") is meestal een terugkerende paginakop.
-  const isRunningHead = (t) => t.split(' ').length <= 6 && /\p{Lu}{3}/u.test(t) && t === t.toUpperCase();
-  while (lines.length && (isPageNum(lines[0].text) || isRunningHead(lines[0].text))) lines.shift();
-  while (lines.length && isPageNum(lines[lines.length - 1].text)) lines.pop();
-  if (!lines.length) return '';
-
-  const full = lines.filter(l => l.text.split(' ').length >= 5);
-  const right = median(full.map(l => l.x1));
-  const left = median(full.map(l => l.x0));
-  const width = Math.max(1, right - left);
-  const gaps = lines.slice(1).map((l, i) => l.y0 - lines[i].y1).filter(g => g > 0);
-  const gap = median(gaps) || 10;
-
-  let out = '', para = '';
-  lines.forEach((l, i) => {
-    const prev = lines[i - 1];
-    if (prev) {
-      const short = prev.x1 < right - width * 0.1;
-      const bigGap = l.y0 - prev.y1 > gap * 1.8 + 4;
-      const indent = l.x0 > left + width * 0.03 && l.x0 - prev.x0 > width * 0.03;
-      const heading = short && prev.text.split(' ').length <= 6 && !/[-,]$/.test(prev.text);
-      if ((short && /[.!?:;”"')\]]$/.test(prev.text)) || bigGap || heading || (indent && short)) {
-        out += para + '\n\n'; para = '';
-      } else if (/[\p{L}][-­]$/u.test(para) && /^\p{Ll}/u.test(l.text)) {
-        para = para.slice(0, -1); // afgebroken woord weer aan elkaar
-      } else para += ' ';
-    }
-    para += l.text;
-  });
-  out += para;
-  return tidy(out);
-}
-
-/** Kleine opschoning, ook bruikbaar voor platte tekst. */
-function tidy(t) {
-  return t.replace(/ {2,}/g, ' ').replace(/ ([,.;:!?])/g, '$1')
-    .split('\n\n').map(s => s.trim()).filter(Boolean).join('\n\n');
-}
-
-/* ---------- Afbeeldingen ---------- */
-
-function loadImage(blob) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => { resolve(img); setTimeout(() => URL.revokeObjectURL(url), 1000); };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Afbeelding kon niet worden geladen')); };
-    img.src = url;
-  });
-}
-
-async function resizeToBlob(blob, maxSide, quality = 0.85, rotate = 0) {
-  const img = await loadImage(blob);
-  const w0 = img.naturalWidth, h0 = img.naturalHeight;
-  const scale = Math.min(1, maxSide / Math.max(w0, h0));
-  const w = Math.round(w0 * scale), h = Math.round(h0 * scale);
-  const swap = rotate % 180 !== 0;
-  const c = document.createElement('canvas');
-  c.width = swap ? h : w;
-  c.height = swap ? w : h;
-  const g = c.getContext('2d');
-  g.translate(c.width / 2, c.height / 2);
-  g.rotate((rotate * Math.PI) / 180);
-  g.drawImage(img, -w / 2, -h / 2, w, h);
-  return new Promise(r => c.toBlob(r, 'image/jpeg', quality));
-}
-
-
-/** Gelijkmatige belichting: deel elk pixel door de lokale achtergrondhelderheid.
-    Haalt schaduwen, vignettering en donkere randen weg vóór de herkenning. */
-async function prepareForOcr(blob) {
-  const img = await loadImage(blob);
-  const scale = Math.min(1, 2200 / Math.max(img.naturalWidth, img.naturalHeight));
-  const W = Math.round(img.naturalWidth * scale), H = Math.round(img.naturalHeight * scale);
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const g = c.getContext('2d', { willReadFrequently: true });
-  g.drawImage(img, 0, 0, W, H);
-  const id = g.getImageData(0, 0, W, H), d = id.data;
-  const gray = new Uint8ClampedArray(W * H);
-  for (let i = 0, j = 0; j < gray.length; i += 4, j++) gray[j] = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
-  // Achtergrond: helderste waarde per blok, daarna licht uitgesmeerd.
-  const B = Math.max(16, Math.round(Math.max(W, H) / 60));
-  const gw = Math.ceil(W / B), gh = Math.ceil(H / B);
-  const grid = new Float32Array(gw * gh);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const k = ((y / B) | 0) * gw + ((x / B) | 0);
-    const v = gray[y * W + x];
-    if (v > grid[k]) grid[k] = v;
-  }
-  const sm = new Float32Array(gw * gh);
-  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
-    let sum = 0, n = 0;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      const yy = y + dy, xx = x + dx;
-      if (yy >= 0 && yy < gh && xx >= 0 && xx < gw) { sum += grid[yy * gw + xx]; n++; }
-    }
-    sm[y * gw + x] = Math.max(sum / n, 1);
-  }
-  for (let y = 0; y < H; y++) {
-    const fy = Math.min(gh - 1.001, Math.max(0, y / B - 0.5)), y0 = fy | 0, ty = fy - y0;
-    for (let x = 0; x < W; x++) {
-      const fx = Math.min(gw - 1.001, Math.max(0, x / B - 0.5)), x0 = fx | 0, tx = fx - x0;
-      const a = sm[y0 * gw + x0], b = sm[y0 * gw + x0 + 1], cc = sm[(y0 + 1) * gw + x0], dd = sm[(y0 + 1) * gw + x0 + 1];
-      const bg = (a * (1 - tx) + b * tx) * (1 - ty) + (cc * (1 - tx) + dd * tx) * ty;
-      let v = gray[y * W + x] / bg;               // 1 = papier
-      v = v >= 0.9 ? 255 : Math.max(0, (v - 0.35) / 0.55) * 255; // contrast
-      const i = (y * W + x) * 4;
-      d[i] = d[i + 1] = d[i + 2] = v;
-    }
-  }
-  g.putImageData(id, 0, 0);
-  return c;
-}
-
-/* ---------- Tekstherkenning (Tesseract.js, lokaal) ---------- */
-
-const ocr = {
-  worker: null,
-  lang: null,
-  ready: null,
-  onProgress: null,
-  async get(lang) {
-    if (this.worker && this.lang === lang) return this.worker;
-    if (this.ready) await this.ready.catch(() => {});
-    if (this.worker && this.lang === lang) return this.worker;
-    const base = new URL('vendor/', location.href).href;
-    this.ready = (async () => {
-      if (this.worker) { await this.worker.terminate(); this.worker = null; }
-      const w = await Tesseract.createWorker(lang.split('+'), 1, {
-        workerPath: base + 'tesseract/worker.min.js',
-        corePath: base + 'tesseract/',
-        langPath: base + 'lang',
-        workerBlobURL: false,
-        gzip: true,
-        logger: (m) => this.onProgress && this.onProgress(m),
-      });
-      await w.setParameters({ preserve_interword_spaces: '0' });
-      this.worker = w;
-      this.lang = lang;
-      return w;
-    })();
-    try { return await this.ready; } finally { this.ready = null; }
-  },
-  async recognize(blob, lang, onProgress) {
-    this.onProgress = onProgress;
-    const w = await this.get(lang);
-    const canvas = await prepareForOcr(blob);
-    const { data } = await w.recognize(canvas, {}, { text: true, blocks: true });
-    this.onProgress = null;
-    const text = data.blocks ? buildText(data.blocks) : tidy(data.text || '');
-    return { text, confidence: Math.round(data.confidence) };
-  },
-};
 
 /* ---------- Scannen ---------- */
 
@@ -979,10 +802,20 @@ function buildMarkdown(book, pages, chapterId) {
       const ch = chapterFor(book, p.pageNumber);
       if (ch && ch.id !== cur) { out.push(`## ${ch.title}`); cur = ch.id; }
     }
-    out.push(`*p. ${p.pageNumber}*\n\n${(p.text || '').trim()}`);
+    let text = (p.text || '').trim();
+    // Staat de hoofdstuktitel zelf als kop bovenaan de pagina? Dan niet dubbel.
+    const ch = chapterFor(book, p.pageNumber);
+    const first = text.match(/^#{1,6} (.*)(\n|$)/);
+    if (ch && first && same(first[1], ch.title)) text = text.slice(first[0].length).trim();
+    out.push(`*p. ${p.pageNumber}*\n\n${text}`);
   }
   return out.join('\n\n') + '\n';
 }
+
+const same = (a, b) => {
+  const n = (s) => s.normalize('NFKD').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  return n(a) === n(b);
+};
 
 function slug(s) {
   return s.normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 60) || 'boek';
