@@ -2,7 +2,7 @@
 
 import {
   grayFromCanvas, canvasFromGray, findPage, warpPage, normalizeLight, estimateSkew, rotate,
-  dewarp, removeRules, clearBorders, findDropCaps, cropForOcr, whiteOut,
+  dewarp, removeRules, clearBorders, cropSides, findDropCaps, cropForOcr, whiteOut,
 } from './scan.js';
 
 /* ---------- Tekst opbouwen ---------- */
@@ -85,7 +85,10 @@ export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
   for (const l of lines) {
     if (blockM[l.block]) continue;
     const ls = full.filter(x => x.block === l.block);
-    blockM[l.block] = ls.length >= 3 ? marg(ls) : pageM;
+    // Eigen marges alleen voor een echt andere kolom; een ingesprongen citaat houdt de paginamarges.
+    const bm = ls.length >= 3 ? marg(ls) : pageM;
+    const pw = Math.max(1, pageM.right - pageM.left);
+    blockM[l.block] = Math.abs(bm.left - pageM.left) > pw * 0.2 || Math.abs(bm.right - pageM.right) > pw * 0.2 ? bm : pageM;
   }
   const gaps = lines.slice(1).map((l, i) => l.y0 - lines[i].y1).filter(g => g > 0);
   const gap = median(gaps) || 10;
@@ -106,18 +109,25 @@ export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
     l.indentL = (l.x0 - m.left) / width;
     l.indentR = (m.right - l.x1) / width;
   }
-  // Citaten: minstens twee regels die links duidelijk verder inspringen dan de tekst,
-  // of één regel die aan beide kanten inspringt en kleiner gezet is.
+  // Paginakop: een korte eerste regel in gewone (of kleinere) letter, gecentreerd, met witruimte eronder.
+  if (!sparse && lines.length >= 8) {
+    const [h, n] = lines;
+    if (h.kind === 'center' && h.size < bodySize * 1.15 && n.y0 - h.y1 > gap * 1.5) lines.shift();
+  }
+  // Citaten: minstens twee regels die links verder inspringen dan de tekst (bij weinig inspringen
+  // alleen met extra witruimte erboven), of één kleinere regel die aan beide kanten inspringt.
   if (!sparse) {
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
-      if (l.kind !== 'text' || l.besideCap || l.indentL < 0.045) continue;
+      if (l.kind !== 'text' || l.besideCap || l.indentL < 0.025) continue;
       let j = i;
       while (j + 1 < lines.length && lines[j + 1].kind === 'text' && !lines[j + 1].besideCap
-        && Math.abs(lines[j + 1].indentL - l.indentL) < 0.02 && lines[j + 1].block === l.block) j++;
+        && Math.abs(lines[j + 1].indentL - l.indentL) < 0.015 && lines[j + 1].y0 - lines[j].y1 < gap * 1.8 + 4) j++;
       const n = j - i + 1;
+      const spaced = i > 0 && l.y0 - lines[i - 1].y1 > gap * 1.8 + 4;
       const smaller = l.size < bodySize * 0.93;
-      if (n >= 2 || (smaller && l.indentR > 0.04 && /^[‘'“"„«]/.test(l.text))) for (let k = i; k <= j; k++) lines[k].kind = 'quote';
+      if ((n >= 2 && (l.indentL >= 0.045 || spaced)) || (smaller && l.indentR > 0.04 && /^[‘'“"„«]/.test(l.text)))
+        for (let k = i; k <= j; k++) lines[k].kind = 'quote';
       i = j;
     }
   }
@@ -225,6 +235,8 @@ export async function prepareForOcr(blob) {
   if (quad) { img = warpPage(img, quad); steps.push('pagina'); }
   const photo = img;
   img = normalizeLight(img);
+  const cs = cropSides(img);
+  if (cs.cropped) { img = cs.img; steps.push('buurpagina weg'); }
   const angle = estimateSkew(img);
   if (Math.abs(angle) >= 0.3) { img = rotate(img, angle); steps.push(`scheef ${angle.toFixed(1)}°`); }
   const dw = dewarp(img);

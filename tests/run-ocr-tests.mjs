@@ -47,6 +47,7 @@ for (const name of names) {
   const found = want.filter(w => got.has(w)).length;
   const recall = want.length ? Math.round((100 * found) / want.length) : 100;
   const missing = (exp.contains || []).filter(s => !res.text.includes(s));
+  if (exp.startsWith && !res.text.startsWith(exp.startsWith)) missing.push(`begint met ${exp.startsWith} (nu: ${res.text.slice(0, 40)})`);
   const ok = recall >= (exp.minRecall ?? 90) && !missing.length;
   if (!ok) failed++;
   console.log(`${ok ? 'OK  ' : 'FOUT'} ${name}: woorden ${recall}%, zekerheid ${res.confidence}%, ${res.ms} ms`);

@@ -206,6 +206,36 @@ export function clearBorders({ g, W, H }) {
   return n;
 }
 
+/** Knipt smalle stroken tekst van de buurpagina aan de linker- en rechterrand weg. */
+export function cropSides(img) {
+  const f = 4;
+  const { g, W, H } = shrink(img, f);
+  const col = new Float64Array(W);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (g[y * W + x] < 140) col[x]++;
+  const r = Math.max(1, Math.round(W * 0.006));
+  const sm = col.map((_, x) => { let v = 0, n = 0; for (let d = -r; d <= r; d++) if (x + d >= 0 && x + d < W) { v += col[x + d]; n++; } return v / n; });
+  const thr = Math.max(...sm) * 0.04;
+  // Aaneengesloten stukken met inkt; kleine tussenruimtes horen er nog bij.
+  const segs = [];
+  let start = -1, lastInk = -1;
+  for (let x = 0; x <= W; x++) {
+    const on = x < W && sm[x] > thr;
+    if (on) { if (start < 0) start = x; lastInk = x; }
+    else if (start >= 0 && (x === W || x - lastInk > W * 0.015)) { segs.push([start, lastInk]); start = -1; }
+  }
+  if (segs.length < 2) return { img, cropped: false };
+  const main = Math.max(...segs.map(([a, b]) => b - a));
+  const edge = W * 0.03;
+  const keep = segs.filter(([a, b]) => !((b - a) < main * 0.25 && (a <= edge || b >= W - 1 - edge)));
+  if (keep.length === segs.length || !keep.length) return { img, cropped: false };
+  const pad = Math.round(W * 0.015);
+  // Wit maken in plaats van bijsnijden, zodat de afmetingen gelijk blijven.
+  const xa = Math.max(0, keep[0][0] - pad) * f, xb = Math.min(W, keep[keep.length - 1][1] + 1 + pad) * f;
+  const out = Uint8ClampedArray.from(img.g);
+  for (let y = 0; y < img.H; y++) { out.fill(255, y * img.W, y * img.W + xa); out.fill(255, y * img.W + xb, (y + 1) * img.W); }
+  return { img: { g: out, W: img.W, H: img.H }, cropped: true };
+}
+
 /* ---------- 3. Scheefstand ---------- */
 
 /** Hoek (graden) waarbij de regels het scherpst horizontaal liggen. */
@@ -249,8 +279,8 @@ export function rotate(img, deg) {
 
 /* ---------- 4. Kromme regels rechttrekken ---------- */
 
-/** Vergelijkt het regelpatroon in smalle verticale stroken met dat van een referentiestrook,
-    en schuift elke strook omhoog of omlaag zodat de regels weer recht liggen. */
+/** Volgt elke tekstregel vanaf het midden naar links en rechts, en schuift elke kolom pixels
+    zo omhoog of omlaag dat de regels weer recht liggen (tussen de regels wordt geïnterpoleerd). */
 export function dewarp(img) {
   const f = 2;
   const s = shrink(img, f);
@@ -262,8 +292,8 @@ export function dewarp(img) {
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (ink[y * W + x]) { colInk[x]++; rowInk[y]++; }
   const span = (arr) => {
     const tot = arr.reduce((a, b) => a + b, 0); let acc = 0, lo = 0, hi = arr.length - 1;
-    for (let i = 0; i < arr.length; i++) { acc += arr[i]; if (acc > tot * 0.02) { lo = i; break; } }
-    acc = 0; for (let i = arr.length - 1; i >= 0; i--) { acc += arr[i]; if (acc > tot * 0.02) { hi = i; break; } }
+    for (let i = 0; i < arr.length; i++) { acc += arr[i]; if (acc > tot * 0.004) { lo = i; break; } }
+    acc = 0; for (let i = arr.length - 1; i >= 0; i--) { acc += arr[i]; if (acc > tot * 0.004) { hi = i; break; } }
     return [lo, hi, tot];
   };
   const [x0, x1, tot] = span(colInk), [y0, y1] = span(rowInk);
@@ -283,97 +313,157 @@ export function dewarp(img) {
     if (acs[lag] >= acs[lag - 1] && acs[lag] >= acs[lag + 1] && acs[lag] > top * 0.6) { spacing = lag; break; }
   }
   if (!spacing) spacing = 20;
-  const strip = clamp(Math.round(spacing * 2), 16, 60);
-  const K = Math.max(3, Math.floor((x1 - x0) / strip));
-  const sw = (x1 - x0) / K;
-  const M = clamp(Math.round((y1 - y0) / (spacing * 5)), 1, 10);
-  const bh = (y1 - y0 + 1) / M;
-  const pad = Math.ceil(spacing);
-  const maxShift = Math.max(2, Math.floor(spacing * 0.4));
+  // Per rij de cumulatieve inkt, zodat inkt in een venster snel te tellen is.
+  const W1 = W + 1, cum = new Int32Array(W1 * H);
+  for (let y = 0; y < H; y++) { let c = 0; for (let x = 0; x < W; x++) { c += ink[y * W + x]; cum[y * W1 + x + 1] = c; } }
+  const winInk = (y, xa, xb) => (y < 0 || y >= H) ? 0 : cum[y * W1 + xb] - cum[y * W1 + xa];
 
-  // Profielen per strook (over de hele hoogte, met wat rand zodat verschuiven kan).
-  const prof = [];
-  const mass = new Float64Array(K);
-  for (let k = 0; k < K; k++) {
-    const p = new Float64Array(H);
-    const xa = Math.round(x0 + k * sw), xb = Math.round(x0 + (k + 1) * sw);
-    for (let y = 0; y < H; y++) { let c = 0; for (let x = xa; x < xb; x++) c += ink[y * W + x]; p[y] = c; mass[k] += c; }
-    const q = new Float64Array(H); // licht vervagen
-    for (let y = 2; y < H - 2; y++) q[y] = (p[y - 2] + 2 * p[y - 1] + 3 * p[y] + 2 * p[y + 1] + p[y + 2]) / 9;
-    prof.push(q);
+  // Monsterkolommen over de breedte van de tekst.
+  const ws = clamp(Math.round(spacing * 1.2), 8, 80), step = Math.max(4, ws >> 1);
+  const xs = [];
+  for (let x = x0 + ws / 2; x <= x1 - ws / 2; x += step) xs.push(Math.round(x));
+  const K = xs.length;
+  if (K < 4) return { img, warped: false };
+  const win = (k) => [clamp(xs[k] - (ws >> 1), 0, W), clamp(xs[k] + (ws >> 1), 0, W)];
+
+  // Startpunten: regels in de kolom met de meeste inkt rond het midden.
+  let kr = K >> 1, best = -1;
+  for (let k = Math.floor(K * 0.3); k <= Math.ceil(K * 0.7) && k < K; k++) {
+    let m = 0; const [xa, xb] = [clamp(xs[k] - ws * 2, 0, W), clamp(xs[k] + ws * 2, 0, W)];
+    for (let y = y0; y <= y1; y++) m += winInk(y, xa, xb);
+    if (m > best) { best = m; kr = k; }
   }
-  // Referentie: de strook met de meeste inkt in het midden van het tekstgebied.
-  let ref = K >> 1, rb = -1;
-  for (let k = Math.floor(K * 0.2); k <= Math.ceil(K * 0.8) && k < K; k++) if (mass[k] > rb) { rb = mass[k]; ref = k; }
+  const band = [clamp(xs[kr] - ws * 2, 0, W), clamp(xs[kr] + ws * 2, 0, W)];
+  const prof = new Float64Array(H);
+  const rad = Math.max(1, Math.round(spacing / 8));
+  for (let y = 0; y < H; y++) {
+    let v = 0; for (let d = -rad; d <= rad; d++) v += winInk(y + d, band[0], band[1]);
+    prof[y] = v;
+  }
+  let pmax = 0; for (let y = y0; y <= y1; y++) pmax = Math.max(pmax, prof[y]);
+  const seeds = [];
+  for (let y = Math.max(1, y0 - rad); y < Math.min(H - 1, y1 + rad); y++) {
+    if (prof[y] < pmax * 0.25 || prof[y] < prof[y - 1] || prof[y] < prof[y + 1]) continue;
+    if (seeds.length && y - seeds[seeds.length - 1] < spacing * 0.6) {
+      if (prof[y] > prof[seeds[seeds.length - 1]]) seeds[seeds.length - 1] = y;
+      continue;
+    }
+    seeds.push(y);
+  }
+  if (seeds.length < 3) return { img, warped: false };
 
-  const off = Array.from({ length: M }, () => new Float64Array(K));
-  for (let m = 0; m < M; m++) {
-    const ya = Math.round(y0 + m * bh), yb = Math.round(y0 + (m + 1) * bh);
-    const energy = (p, sh) => { let e = 0; for (let y = Math.max(0, ya + sh); y < Math.min(H, yb + sh); y++) e += p[y]; return e; };
-    const minEnergy = sw * (yb - ya) * 0.01;
-    const shift = (pa, pb, base) => {
-      // pa: strook met bekende verschuiving base; zoek beste extra verschuiving voor pb.
-      if (energy(pa, Math.round(base)) < minEnergy || energy(pb, Math.round(base)) < minEnergy) return null;
-      const scores = [];
-      for (let sh = -maxShift; sh <= maxShift; sh++) {
-        let v = 0, na = 0, nb = 0;
-        for (let y = Math.max(pad, ya); y < Math.min(H - pad, yb); y++) {
-          const ia = y + Math.round(base), ib = ia + sh;
-          if (ia < 0 || ib < 0 || ia >= H || ib >= H) continue;
-          v += pa[ia] * pb[ib]; na += pa[ia] * pa[ia]; nb += pb[ib] * pb[ib];
-        }
-        scores.push(na && nb ? v / Math.sqrt(na * nb) : 0);
-      }
-      let bi = 0; for (let i = 1; i < scores.length; i++) if (scores[i] > scores[bi]) bi = i;
-      if (scores[bi] < 0.3) return null;
-      let sub = 0;
-      if (bi > 0 && bi < scores.length - 1) {
-        const a = scores[bi - 1], b = scores[bi], c = scores[bi + 1], den = a - 2 * b + c;
-        if (den < 0) sub = clamp(0.5 * (a - c) / den, -0.5, 0.5);
-      }
-      return bi - maxShift + sub;
-    };
-    for (const dir of [-1, 1]) {
-      for (let k = ref + dir; k >= 0 && k < K; k += dir) {
-        const prevOff = off[m][k - dir];
-        const d = shift(prof[k - dir], prof[k], prevOff);
-        off[m][k] = prevOff + (d == null ? 0 : d);
+  // Elke regel volgen naar links en rechts.
+  const reach = spacing * 0.45;
+  const minInk = ws * 0.06;
+  const locate = (k, yp) => {
+    const [xa, xb] = win(k);
+    let bi = -1, bv = 0;
+    const ya = Math.round(yp - reach), yb = Math.round(yp + reach);
+    const q = (y) => winInk(y - 1, xa, xb) + 2 * winInk(y, xa, xb) + winInk(y + 1, xa, xb);
+    for (let y = ya; y <= yb; y++) { const v = q(y); if (v > bv) { bv = v; bi = y; } }
+    if (bi < 0 || bv < minInk * 4) return null;
+    found.push(bv);
+    // Zwaartepunt rond de top, voor een rustiger lijn.
+    let sw2 = 0, sy = 0;
+    for (let y = bi - Math.round(spacing * 0.25); y <= bi + Math.round(spacing * 0.25); y++) { const v = winInk(y, xa, xb); sw2 += v; sy += v * y; }
+    return sw2 ? sy / sw2 : bi;
+  };
+  const found = [];
+  const lines = seeds.map((ys) => {
+    const y = new Float64Array(K), ok = new Uint8Array(K), str = new Float64Array(K);
+    y[kr] = locate(kr, ys) ?? ys; ok[kr] = 1;
+    for (const dir of [1, -1]) {
+      let yp = y[kr], slope = 0, miss = 0, lastK = kr;
+      for (let k = kr + dir; k >= 0 && k < K; k += dir) {
+        const pred = yp + slope * step * dir * (miss + 1);
+        const r = miss > 5 ? null : locate(k, pred);
+        if (r == null) { y[k] = pred; miss++; continue; }
+        yp = r;
+        const ns = (r - y[lastK]) / ((k - lastK) * step * dir);
+        slope = clamp(slope * 0.3 + ns * 0.7, -1, 1);
+        y[k] = r; ok[k] = 1; str[k] = found[found.length - 1]; lastK = k; miss = 0;
       }
     }
+    // Uitvlakken (gemiddelde van geldige buren).
+    const sm = Float64Array.from(y);
+    for (let k = 0; k < K; k++) {
+      if (!ok[k]) continue;
+      let s2 = 0, n2 = 0;
+      for (let j = k - 1; j <= k + 1; j++) if (j >= 0 && j < K && ok[j]) { s2 += y[j]; n2++; }
+      sm[k] = s2 / n2;
+    }
+    str[kr] = Infinity;
+    return { target: sm[kr], y: sm, ok, str };
+  });
+  // Zwakke treffers (weinig inkt vergeleken met gewone tekst) niet vertrouwen.
+  const typical = median(found);
+  for (const l of lines) for (let k = 0; k < K; k++) if (l.ok[k] && l.str[k] < typical * 0.3) l.ok[k] = 0;
+  // Uitschieters: een regel moet ongeveer even ver verschoven zijn als de regels erboven en eronder.
+  for (let k = 0; k < K; k++) {
+    const v = lines.map((l, i) => (l.ok[k] ? i : -1)).filter(i => i >= 0);
+    const bad = [];
+    v.forEach((i, j) => {
+      const nb = [v[j - 2], v[j - 1], v[j + 1], v[j + 2]].filter(x => x !== undefined).map(x => lines[x].y[k] - lines[x].target);
+      if (nb.length >= 2 && Math.abs(lines[i].y[k] - lines[i].target - median(nb)) > spacing * 0.3) bad.push(i);
+    });
+    for (const i of bad) lines[i].ok[k] = 0;
   }
-  // Uitvlakken in x (twee keer een 3-puntsgemiddelde) en in y.
-  for (let m = 0; m < M; m++) for (let r = 0; r < 2; r++) {
-    const o = off[m], c = Float64Array.from(o);
-    for (let k = 0; k < K; k++) o[k] = (c[Math.max(0, k - 1)] + c[k] + c[Math.min(K - 1, k + 1)]) / 3;
+  // Regels die maar kort te volgen waren, tellen niet mee.
+  let good = 0;
+  for (const l of lines) { let n = 0; for (let k = 0; k < K; k++) n += l.ok[k]; if (n < K * 0.25) l.ok.fill(0); else good++; }
+  if (good < 5) return { img, warped: false };
+  // Regels mogen elkaar niet kruisen; anders die monsters negeren.
+  for (let k = 0; k < K; k++) {
+    let prev = -Infinity;
+    for (const l of lines) {
+      if (!l.ok[k]) continue;
+      if (l.y[k] - prev < spacing * 0.4) { l.ok[k] = 0; continue; }
+      prev = l.y[k];
+    }
   }
-  if (M >= 3) {
-    const c = off.map(o => Float64Array.from(o));
-    for (let m = 0; m < M; m++) for (let k = 0; k < K; k++)
-      off[m][k] = (c[Math.max(0, m - 1)][k] + 2 * c[m][k] + c[Math.min(M - 1, m + 1)][k]) / 4;
-  }
+
+  // Verschuiving per monsterkolom en per doelhoogte (lineair tussen de regels).
+  const D = Array.from({ length: K }, () => new Float32Array(H));
   let maxOff = 0;
-  for (const o of off) for (const v of o) maxOff = Math.max(maxOff, Math.abs(v));
-  if (maxOff < 1) return { img, warped: false };
+  for (let k = 0; k < K; k++) {
+    const pts = lines.filter(l => l.ok[k]).map(l => [l.target, l.y[k] - l.target]);
+    if (!pts.length) { if (k > 0) D[k].set(D[k - 1]); continue; }
+    let j = 0;
+    for (let yy = 0; yy < H; yy++) {
+      while (j < pts.length - 1 && pts[j + 1][0] <= yy) j++;
+      let d;
+      if (yy <= pts[0][0]) d = pts[0][1];
+      else if (j >= pts.length - 1) d = pts[pts.length - 1][1];
+      else { const [ta, da] = pts[j], [tb, db] = pts[j + 1]; d = da + (db - da) * (yy - ta) / (tb - ta); }
+      D[k][yy] = d;
+    }
+    for (const [, d] of pts) maxOff = Math.max(maxOff, Math.abs(d));
+  }
+  // Lege kolommen aan het begin opvullen.
+  for (let k = K - 2; k >= 0; k--) if (!lines.some(l => l.ok[k])) D[k].set(D[k + 1]);
+  // Geen of een onwaarschijnlijk grote kromming (dan is er iets anders gevolgd dan tekstregels).
+  if (maxOff < 1 || maxOff > spacing * 3) return { img, warped: false };
+
+  const { g: G, W: FW, H: FH } = img;
+  const srcX = Array.from({ length: FW }, (_, x) => x);
+  const OW = FW;
 
   // Terugrekenen naar volle resolutie en verschuiven.
-  const { g: G, W: FW, H: FH } = img;
-  const out = new Uint8ClampedArray(FW * FH);
-  const colOff = Array.from({ length: M }, () => new Float32Array(FW));
-  for (let m = 0; m < M; m++) for (let x = 0; x < FW; x++) {
-    const fk = clamp((x / f - x0) / sw - 0.5, 0, K - 1), k0 = Math.min(K - 1, fk | 0), k1 = Math.min(K - 1, k0 + 1), t = fk - k0;
-    colOff[m][x] = (off[m][k0] * (1 - t) + off[m][k1] * t) * f;
-  }
-  for (let y = 0; y < FH; y++) {
-    const fm = clamp((y / f - y0) / bh - 0.5, 0, M - 1), m0 = Math.min(M - 1, fm | 0), m1 = Math.min(M - 1, m0 + 1), t = fm - m0;
-    const A = colOff[m0], Bo = colOff[m1];
-    for (let x = 0; x < FW; x++) {
-      const sy = y + A[x] * (1 - t) + Bo[x] * t;
-      if (sy < 0 || sy >= FH - 1) { out[y * FW + x] = 255; continue; }
-      const yi = sy | 0, ty = sy - yi;
-      out[y * FW + x] = G[yi * FW + x] * (1 - ty) + G[(yi + 1) * FW + x] * ty;
+  const out = new Uint8ClampedArray(OW * FH);
+  for (let X = 0; X < OW; X++) {
+    const sx = srcX[X], xi = Math.min(FW - 2, sx | 0), tx = sx - xi;
+    const fk = clamp((sx / f - xs[0]) / step, 0, K - 1), k0 = Math.min(K - 1, fk | 0), k1 = Math.min(K - 1, k0 + 1), t = fk - k0;
+    const A = D[k0], B = D[k1];
+    for (let Y = 0; Y < FH; Y++) {
+      const yy = Math.min(H - 1, (Y / f) | 0);
+      const sy = Y + (A[yy] * (1 - t) + B[yy] * t) * f;
+      if (sy < 0 || sy >= FH - 1) { out[Y * OW + X] = 255; continue; }
+      const yi = sy | 0, ty = sy - yi, i = yi * FW + xi;
+      out[Y * OW + X] = (G[i] * (1 - tx) + G[i + 1] * tx) * (1 - ty) + (G[i + FW] * (1 - tx) + G[i + FW + 1] * tx) * ty;
     }
   }
-  return { img: { g: out, W: FW, H: FH }, warped: true, maxOff: maxOff * f };
+  return { img: { g: out, W: OW, H: FH }, warped: true, maxOff: maxOff * f, lines: lines.length,
+    tracks: lines.map(l => Array.from(l.y, (v, k) => [xs[k] * f, v * f, l.ok[k]])) };
 }
 
 /* ---------- 5. Kaderlijnen ---------- */

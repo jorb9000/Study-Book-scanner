@@ -60,4 +60,4 @@ Gewone HTML, CSS en JavaScript, zonder build-stap.
 
 Lokaal testen: `python3 -m http.server 8080` in deze map, en dan naar `http://localhost:8080` gaan.
 
-Tekstherkenning testen: `node tests/run-ocr-tests.mjs` (Node en Playwright nodig). Dit herkent de testfoto's in `tests/fixtures` (scheef, opbollende pagina, omslag, studieboek met kader en opsommingen) en controleert de woorden en de opmaak. De uitvoer komt in `tests/out/`.
+Tekstherkenning testen: `node tests/run-ocr-tests.mjs` (Node en Playwright nodig). Dit herkent de testfoto's in `tests/fixtures` (scheef, opbollende pagina, omslag, studieboek met kader en opsommingen, en drie echte iPhone-foto's van een dik boek) en controleert de woorden en de opmaak. De uitvoer komt in `tests/out/`.
