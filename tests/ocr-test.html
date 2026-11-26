@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="nl"><head><meta charset="utf-8"><title>OCR-test</title></head>
+<body>
+<p>Testpagina voor de tekstherkenning. Wordt gebruikt door <code>tests/run-ocr-tests.mjs</code>.</p>
+<script src="../vendor/tesseract/tesseract.min.js"></script>
+<script type="module">
+  import { ocr, prepareForOcr } from '../ocr.js';
+  window.runOcr = async (url, lang = 'nld') => {
+    const blob = await (await fetch(url)).blob();
+    const t = performance.now();
+    let res;
+    try { res = await ocr.recognize(blob, lang); }
+    catch (e) { throw new Error('Herkenning mislukt: ' + (e?.stack || e?.message || JSON.stringify(e) || String(e))); }
+    return { ...res, ms: Math.round(performance.now() - t) };
+  };
+  window.prepared = async (url) => {
+    const blob = await (await fetch(url)).blob();
+    const c = await prepareForOcr(blob);
+    return (c.canvas || c).toDataURL('image/jpeg', 0.85);
+  };
+  // Toont de gevolgde regels (rood = gevonden, blauw = geschat) op de foto vóór het rechttrekken.
+  window.tracks = async (url) => {
+    const S = await import('../scan.js');
+    const { loadImage } = await import('../ocr.js');
+    const im = await loadImage(await (await fetch(url)).blob());
+    const sc = Math.min(1, 2200 / Math.max(im.naturalWidth, im.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(im.naturalWidth * sc); c.height = Math.round(im.naturalHeight * sc);
+    c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+    let img = S.grayFromCanvas(c);
+    const q = S.findPage(img); if (q) img = S.warpPage(img, q);
+    img = S.normalizeLight(img);
+    img = S.cropSides(img).img;
+    const a = S.estimateSkew(img); if (Math.abs(a) >= 0.3) img = S.rotate(img, a);
+    const dw = S.dewarp(img);
+    const out = S.canvasFromGray(img), ctx = out.getContext('2d');
+    for (const t of dw.tracks || []) for (const [x, y, ok] of t) { ctx.fillStyle = ok ? 'red' : 'blue'; ctx.fillRect(x - 4, y - 4, 8, 8); }
+    return out.toDataURL('image/jpeg', 0.8);
+  };
+  window.ready = true;
+</script>
+</body></html>
