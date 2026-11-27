@@ -4,6 +4,7 @@ import {
   grayFromCanvas, canvasFromGray, findPage, warpPage, normalizeLight, estimateSkew, rotate,
   dewarp, removeRules, clearBorders, cropSides, findDropCaps, cropForOcr, whiteOut,
   findGutter, cropX, turn, measureWords,
+  bookCrop,
 } from './scan.js';
 
 /* ---------- Tekst opbouwen ---------- */
@@ -402,18 +403,34 @@ export async function prepareForOcr(blob) {
   const steps = [];
   const quad = findPage(img);
   if (quad) { img = warpPage(img, quad); steps.push('pagina'); }
+
   let photo = img;
   img = normalizeLight(img);
   // Twee pagina's? Eerst het geheel rechtzetten, dan de rug zoeken.
   let halves = [[img, photo]];
-  if (img.W > img.H * 1.1) {
-    const a = estimateSkew(img);
+  // Veel omgeving in beeld (lampopstelling: bureau, lampkap, hand)? Dan zoeken we de scheefstand
+  // en de rug alleen binnen het boek. Anders kan de rand van de lampkap voor de rug worden
+  // aangezien, en trekt de lampkap de scheefstand scheef. Er wordt niets weggeknipt.
+  let x0 = 0, x1 = img.W;
+  if (!quad) {
+    const box = bookCrop(photo);
+    if (box) {
+      const ex = box.w * 0.05;
+      const a0 = Math.max(0, Math.round(box.x - ex)), a1 = Math.min(img.W, Math.round(box.x + box.w + ex));
+      if (a1 - a0 < img.W * 0.95) { x0 = a0; x1 = a1; }
+    }
+  }
+  const inBook = (im) => (x0 > 0 || x1 < im.W ? cropX(im, x0, x1) : im);
+  const book = inBook(img);
+  if (book.W > book.H * 1.1) {
+    const a = estimateSkew(book);
     const straight = Math.abs(a) >= 0.3 ? rotate(img, a) : img;
     const sp = Math.abs(a) >= 0.3 ? rotate(photo, a) : photo;
-    const gx = findGutter(straight, sp);
-    if (gx) {
+    const inner = findGutter(inBook(straight), inBook(sp));
+    if (inner) {
+      const gx = x0 + inner;
       halves = [[cropX(straight, 0, gx), cropX(sp, 0, gx)], [cropX(straight, gx, straight.W), cropX(sp, gx, sp.W)]];
-      steps.push("twee pagina's");
+      steps.push(x0 > 0 || x1 < img.W ? "twee pagina's (rug binnen het boek)" : "twee pagina's");
     }
   }
   const pages = halves.map(([g, p]) => preparePage(g, p, steps, halves.length > 1));

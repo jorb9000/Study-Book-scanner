@@ -1,0 +1,111 @@
+{
+ "_uitleg": "Open boek: wat op welke pagina hoort te staan (has) en niet (not).",
+ "k1": [
+  {
+   "has": [
+    "catacomben"
+   ],
+   "not": [
+    "jongensbed"
+   ]
+  },
+  {
+   "has": [
+    "jongensbed"
+   ],
+   "not": [
+    "catacomben"
+   ]
+  }
+ ],
+ "k2": [
+  {
+   "has": [
+    "tijgerkop"
+   ],
+   "not": [
+    "Schokkende"
+   ]
+  },
+  {
+   "has": [
+    "Schokkende"
+   ],
+   "not": [
+    "tijgerkop"
+   ]
+  }
+ ],
+ "k3": [
+  {
+   "has": [
+    "glibberig"
+   ],
+   "not": [
+    "ziekenhuisbed"
+   ]
+  },
+  {
+   "has": [
+    "ziekenhuisbed"
+   ],
+   "not": [
+    "glibberig"
+   ]
+  }
+ ],
+ "k5": [
+  {
+   "has": [
+    "Besoeki bracht"
+   ],
+   "not": [
+    "Thorbecke"
+   ]
+  },
+  {
+   "has": [
+    "Thorbecke"
+   ],
+   "not": [
+    "Besoeki bracht"
+   ]
+  }
+ ],
+ "m010": [
+  {
+   "has": [
+    "tijgerkop"
+   ],
+   "not": [
+    "Schokkende"
+   ]
+  },
+  {
+   "has": [
+    "Schokkende"
+   ],
+   "not": [
+    "tijgerkop"
+   ]
+  }
+ ],
+ "m011": [
+  {
+   "has": [
+    "Adipati"
+   ],
+   "not": [
+    "complexe probleem"
+   ]
+  },
+  {
+   "has": [
+    "complexe probleem"
+   ],
+   "not": [
+    "Adipati"
+   ]
+  }
+ ]
+}

@@ -23,6 +23,7 @@ const server = createServer(async (req, res) => {
 const port = server.address().port;
 
 const expected = JSON.parse(await readFile(join(root, 'tests/fixtures/expected.json'), 'utf8'));
+const pageExp = JSON.parse(await readFile(join(root, 'tests/fixtures/pages.json'), 'utf8'));
 let names = process.argv.slice(2);
 if (!names.length) names = (await readdir(join(root, 'tests/fixtures'))).filter(f => /\.(jpe?g|png)$/.test(f)).map(f => f.replace(/\.\w+$/, ''));
 await mkdir(join(root, 'tests/out'), { recursive: true });
@@ -52,10 +53,20 @@ for (const name of names) {
   const missing = (exp.contains || []).filter(s => !res.text.includes(s));
   for (const s of exp.notContains || []) if (res.text.includes(s)) missing.push(`mag niet voorkomen: ${s}`);
   if (exp.startsWith && !res.text.startsWith(exp.startsWith)) missing.push(`begint met ${exp.startsWith} (nu: ${res.text.slice(0, 40)})`);
+  // Open boek: staat elke tekst op de juiste pagina? (Lege pagina of beide pagina's in één = fout.)
+  if (pageExp[name]) {
+    const got = (res.pages || []).map(p => p.text || '');
+    if (got.length !== pageExp[name].length) missing.push(`${pageExp[name].length} pagina's (nu: ${got.length})`);
+    pageExp[name].forEach((want, i) => {
+      for (const s of want.has || []) if (!(got[i] || '').includes(s)) missing.push(`pagina ${i + 1} bevat ${JSON.stringify(s)}`);
+      for (const s of want.not || []) if ((got[i] || '').includes(s)) missing.push(`pagina ${i + 1} bevat niet ${JSON.stringify(s)}`);
+    });
+  }
   const ok = recall >= (exp.minRecall ?? 90) && !missing.length;
   if (!ok) failed++;
   console.log(`${ok ? 'OK  ' : 'FOUT'} ${name}: woorden ${recall}%, zekerheid ${res.confidence}%, ${res.ms} ms`);
   for (const m of missing) console.log(`     ontbreekt: ${JSON.stringify(m)}`);
+  if (process.env.PAGES && res.pages) res.pages.forEach((p, i) => console.log(`     p${i + 1}: ${(p.text || '').replace(/\s+/g, ' ').slice(0, 90)} … ${(p.text || '').replace(/\s+/g, ' ').slice(-60)}`));
 }
 await browser.close();
 server.close();
