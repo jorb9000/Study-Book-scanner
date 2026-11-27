@@ -68,4 +68,6 @@ Lokaal testen: `python3 -m http.server 8080` in deze map, en dan naar `http://lo
 
 Tekstherkenning testen: `node tests/run-ocr-tests.mjs` (Node en Playwright nodig). Dit herkent de testfoto's in `tests/fixtures` (scheef, opbollende pagina, omslag, studieboek met kader en opsommingen, en drie echte iPhone-foto's van een dik boek) en controleert de woorden en de opmaak. De uitvoer komt in `tests/out/`.
 
+Nauwkeurigheid meten: `node tests/run-accuracy.mjs`. Dit vergelijkt de herkenning met handmatig nagekeken tekst van tien pagina's uit lampfoto's (`tests/fixtures/referentie/`) en geeft per pagina het percentage woorden dat precies goed is (hoofdletters tellen mee, leestekens niet). `MAXSIDE=2200` meet op iPhone-resolutie (standaard 4096, zoals op de computer), `SHOW=1` toont de fouten.
+
 De hele flow op de computer testen (koppelen, opnemen, nakijken, exporteren) met een nagemaakte iPhone-camera: `npm i --no-save peer && node tests/run-flow-test.mjs` (ook ffmpeg nodig).

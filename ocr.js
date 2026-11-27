@@ -3,7 +3,7 @@
 import {
   grayFromCanvas, canvasFromGray, findPage, warpPage, normalizeLight, estimateSkew, rotate,
   dewarp, removeRules, clearBorders, cropSides, findDropCaps, cropForOcr, whiteOut,
-  findGutter, cropX, turn, measureWords,
+  findGutter, cropX, turn, measureWords, lineSpacing,
   bookCrop, newCanvas,
 } from './scan.js';
 
@@ -125,6 +125,8 @@ function collectLines(blocks) {
     const hasLetter = (x) => /[\p{L}\p{N}]/u.test(x.text);
     const junk = (x) => (x.confidence < 55 && (x.text.length <= 2 || !hasLetter(x))) || (!hasLetter(x) && x.confidence < 85)
       || x.confidence < 25;
+    // Het opsommingsteken zelf hoort niet in de tekst (de regel wordt een '- ' opsomming).
+    if (bullet) w = w.slice(1);
     while (w.length && junk(w[0])) w.shift();
     while (w.length && junk(w[w.length - 1])) w.pop();
     if (!w.length) continue;
@@ -137,7 +139,7 @@ function collectLines(blocks) {
     const text = w.map(x => x.text).join(' ');
     const styled = styleWords(w);
     const letters = text.replace(/[^\p{L}]/gu, '').length;
-    if (conf < 50 || (w.length <= 2 && conf < 70 && !isPageNum(text))) continue;
+    if (conf < 50 || (w.length <= 2 && conf < 70 && !isPageNum(text))) { if (globalThis.__dbg) console.log('[ocr] weg', Math.round(conf), text.slice(0, 80)); continue; }
     if (letters === 0 && !isPageNum(text)) continue;
     lines.push({
       text, styled, block: bi, conf, size: rh, words: w.length, bullet,
@@ -145,7 +147,11 @@ function collectLines(blocks) {
       y0: Math.min(...w.map(x => x.bbox.y0)), y1: Math.max(...w.map(x => x.bbox.y1)),
     });
   } });
-  return reorder(lines);
+  // Losse cijfertjes die veel kleiner zijn dan de tekst (vlekjes in de marge, vooral bij de rug)
+  // zijn geen paginanummer; ze zouden anders aan een regel worden geplakt ("Ondoordring- 1 bare").
+  const body = median(lines.filter(l => l.words >= 4).map(l => l.size));
+  const noise = (l) => body && !/\p{L}/u.test(l.text) && (l.size < body * 0.6 || (l.text.trim().length === 1 && l.conf < 80));
+  return reorder(lines.filter(l => !noise(l)));
 }
 
 /** Tesseract knipt regels op een kromme of onscherpe pagina soms in stukken, verdeeld over
@@ -192,7 +198,7 @@ function reorder(lines) {
 /** Bouwt Markdown uit de regels die Tesseract vindt: alinea's, koppen, citaten en opsommingen.
     dropCaps: [{ letter, x0, y0, x1, y1 }] (grote beginletters die apart zijn herkend).
     sparse: losse tekst (omslag, kaders) — elke regel blijft een eigen regel. */
-export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
+export function buildText(blocks, { dropCaps = [], sparse = false, freq = null } = {}) {
   const lines = collectLines(blocks);
   // Kopregel bovenaan in hoofdletters (bv. "3 · GEHEUGEN") is meestal een terugkerende paginakop.
   const isRunningHead = (t) => {
@@ -217,8 +223,10 @@ export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
       if (d < bd && d < cap.lineHeight * 2.5) { bd = d; best = l; }
     }
     if (best) {
-      best.text = cap.letter + best.text;
-      if (best.styled != null) best.styled = best.styled.replace(/^([\uE001-\uE004]*)/, `$1${cap.letter}`);
+      // Het woord na de beginletter loopt gewoon door: "B" + "Oven" wordt "Boven".
+      const low = (t) => t.replace(/^([\uE001-\uE004]*)(\p{Lu})(?=\p{Ll})/u, (_, a, c) => a + c.toLowerCase());
+      best.text = cap.letter + low(best.text);
+      if (best.styled != null) best.styled = low(best.styled).replace(/^([\uE001-\uE004]*)/, `$1${cap.letter}`);
       best.x0 = cap.x0;
       for (const l of lines) if (l !== best && l.y0 < cap.y1 && l.y0 > best.y0 && l.x0 > cap.x0) l.besideCap = true;
     }
@@ -319,9 +327,25 @@ export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
     if (/[\p{L}][-­]$/u.test(cur.text) && /^\p{Ll}/u.test(l.text)) { // afgebroken woord
       cur.text = cur.text.slice(0, -1) + l.text;
       cur.styled = cur.styled.replace(/[-­]([\uE001-\uE004]*)$/, '$1') + st;
+    } else if (freq && !/[\uE001-\uE004]$/.test(cur.styled) && brokenWord(cur.text, l.text, freq) >= 0) {
+      // Afbreekstreepje niet (goed) gelezen: "bescher:" + "ming".
+      const cut = brokenWord(cur.text, l.text, freq);
+      cur.text = cur.text.slice(0, cur.text.length - cut) + l.text;
+      cur.styled = cur.styled.slice(0, cur.styled.length - cut) + st;
     } else { cur.text += ' ' + l.text; cur.styled += ' ' + st; }
   });
   flush();
+  // Een blok dat midden in een woord eindigt ("bet-") loopt door in het volgende blok ("gen te zien"),
+  // ook als dat als citaat of nieuwe alinea is gezien (inspringing, grote beginletter).
+  for (let i = out.length - 2; i >= 0; i--) {
+    const a = out[i], b = out[i + 1];
+    if (sparse || a.kind.startsWith('h') || b.kind.startsWith('h')) continue;
+    if (!/[\p{L}][-­]$/u.test(a.text) || !/^\p{Ll}/u.test(b.text)) continue;
+    a.text = a.text.slice(0, -1) + b.text;
+    a.styled = a.styled.replace(/[-­]([\uE001-\uE004]*)$/, '$1') + b.styled;
+    a.lines += b.lines;
+    out.splice(i + 1, 1);
+  }
 
   const md = out.map((b, i) => {
     // Opmaak binnen de tekst alleen in gewone alinea's, citaten en opsommingen.
@@ -342,6 +366,21 @@ export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
   // Opeenvolgende opsommingstekens zonder lege regel ertussen.
   const isItem = (x) => /^(- |\d{1,2}\. )/.test(x);
   return md.reduce((acc, s, i) => acc + (i ? (isItem(s) && isItem(md[i - 1]) ? '\n' : '\n\n') : '') + s, '');
+}
+
+/** Hoort het laatste woord van regel a bij het eerste van regel b, terwijl het afbreekstreepje niet
+    (of als punt of dubbele punt) is gelezen? Geeft het stuk terug dat van a af moet, of -1. */
+function brokenWord(a, b, freq) {
+  const m = a.match(/(\p{L}+)([.:]?)$/u), y = b.match(/^(\p{Ll}+)(?![\p{L}-])/u)?.[1];
+  if (!m || !y) return -1;
+  const x = m[1];
+  const k = (w) => freq.get(w.toLowerCase()) ?? -1;
+  // Samen een bekend woord, en een van de stukken bestaat los niet ("bescher" + "ming").
+  if (k(x + y) >= 7 && (k(x) < 0 || k(y) < 0)) return m[2].length;
+  // Een regel die midden in een onbekend woord eindigt op '.' of ':' terwijl de volgende met een
+  // kleine letter begint: dat was een afbreekstreepje ("tabakshisto." + "riën").
+  if (m[2] && x.length >= 5 && k(x) < 0) return 1;
+  return -1;
 }
 
 function clean(t) {
@@ -389,7 +428,28 @@ export async function resizeToBlob(blob, maxSide, quality = 0.85, rotate = 0) {
 
 /** Grootste zijde (pixels) waarmee een foto wordt herkend. Op de computer hoger, zodat een
     4K-opname van een open boek vanaf de lamp niet onnodig wordt verkleind. */
-export const ocrConfig = { maxSide: 2200 };
+export const ocrConfig = {
+  maxSide: 2200,
+  // Vergroten tot de regelafstand zo veel pixels is (0 = niet), of een vaste factor (upscale).
+  lineHeight: 100, upscale: 0,
+  // Zwart-witomzetting per buurt (Sauvola) in plaats van één drempel voor de hele pagina:
+  // houdt de letters bij de rug en in de lampschaduw heel.
+  params: { thresholding_method: '2' },
+};
+
+function scaleCanvas(c, f) {
+  const o = newCanvas(Math.round(c.width * f), Math.round(c.height * f));
+  const g = o.getContext('2d');
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  g.drawImage(c, 0, 0, o.width, o.height);
+  return o;
+}
+
+/** Zet de vakjes van Tesseract terug naar de schaal van het voorbewerkte beeld. */
+function scaleBoxes(blocks, f) {
+  const sb = (o) => { if (o?.bbox) for (const k of ['x0', 'y0', 'x1', 'y1']) o.bbox[k] *= f; if (o?.rowAttributes) for (const k in o.rowAttributes) o.rowAttributes[k] *= f; if (o?.baseline) for (const k of ['x0', 'y0', 'x1', 'y1']) if (k in o.baseline) o.baseline[k] *= f; };
+  for (const b of blocks || []) { sb(b); for (const p of b.paragraphs || []) { sb(p); for (const l of p.lines || []) { sb(l); for (const w of l.words || []) { sb(w); for (const s of w.symbols || []) sb(s); } } } }
+}
 
 async function grayOf(blob) {
   const im = await loadImage(blob);
@@ -559,6 +619,44 @@ export function fixWords(text, freq) {
   return { text: out, fixed };
 }
 
+// Korte woorden die Tesseract soms aan een buurwoord plakt ("perweek", "regelis"). Geen voorzetsels
+// die ook een werkwoord kunnen beginnen (op, aan, in, uit, om ...): "opwaaien" moet heel blijven.
+const GLUE_A = new Set(['de', 'het', 'een', 'en', 'is', 'ik', 'al', 'wij', 'zij', 'hij', 'uw', 'ter', 'dat', 'die', 'als', 'per', 'of', 'ook', 'nog', 'niet', 'was', 'mijn']);
+// Als tweede deel geen 'de', 'en', 'er', 'te': dat zijn ook gewone uitgangen ("lezende", "oerwouden").
+const GLUE_B = new Set(['is', 'het', 'een', 'die', 'dat', 'niet', 'ook', 'nog', 'was', 'én']);
+// Alleen accenten die in gewone Nederlandse tekst bijna nooit voorkomen (é en á wel: één, dáár).
+const ACCENTS = { à: 'a', è: 'e', í: 'i', ì: 'i', ò: 'o', ù: 'u' };
+
+/** Herstelt woorden die niet bestaan maar wel bestaan zonder los accent ("níet") of als twee woorden
+    waarvan één een kort, veelvoorkomend woord is ("perweek" → "per week"). */
+export function fixSpacing(text, freq) {
+  let fixed = 0;
+  if (!freq || !freq.size) return { text, fixed };
+  const known = (w, min = 0) => (freq.get(w) ?? -1) >= min;
+  const out = text.replace(/\p{L}{2,}/gu, (orig) => {
+    const w = orig.toLowerCase();
+    if (known(w) || (orig.length > 1 && orig === orig.toUpperCase())) return orig;
+    // Los accent op een woord dat zonder accent gewoon bestaat.
+    const plain = w.replace(/[àèíìòù]/g, (c) => ACCENTS[c]);
+    if (plain !== w && known(plain, 10) && !/^(een|en|of|die|dat|voor)$/.test(plain)) { fixed++; return matchCase(orig, plain); }
+    if (w.length < 4) return orig;
+    let best = null, bs = -1;
+    for (let i = 2; i <= w.length - 2; i++) {
+      const a = w.slice(0, i), b = w.slice(i);
+      const glueA = GLUE_A.has(a), glueB = GLUE_B.has(b);
+      if (!glueA && !glueB) continue;
+      const other = glueA ? b : a;
+      if (other.length < 2 || !known(other, other.length <= 3 ? 14 : 9)) continue;
+      const sc = Math.min(freq.get(a), freq.get(b));
+      if (sc > bs) { bs = sc; best = [orig.slice(0, i), orig.slice(i)]; }
+    }
+    if (!best) return orig;
+    fixed++;
+    return best.join(' ');
+  });
+  return { text: out, fixed };
+}
+
 /** Strenger: alleen gewone woorden in kleine letters met een klinker (onzin uit een gedraaide foto valt weg). */
 function wordScore(blocks) {
   let s = 0;
@@ -640,7 +738,7 @@ export const ocr = {
     if (lang.split('+').includes('nld')) {
       const freq = await loadWordFreq();
       let n = 0;
-      for (const p of pages) { const r = fixWords(p.text, freq); p.text = r.text; n += r.fixed; }
+      for (const p of pages) { const r = fixWords(p.text, freq); const r2 = fixSpacing(r.text, freq); p.text = r2.text; n += r.fixed + r2.fixed; }
       if (n) prep.steps.push(`woorden ×${n}`);
     }
     const text = pages.map(p => p.text).join('\n\n');
@@ -656,12 +754,19 @@ export const ocr = {
       const t = (data.text || '').trim();
       if (/^\p{Lu}$/u.test(t) && data.confidence > 30) prep.dropCaps[i].letter = t;
     }
-    await w.setParameters({ tessedit_pageseg_mode: '3', tessedit_char_whitelist: '' });
+    await w.setParameters({ tessedit_pageseg_mode: '3', tessedit_char_whitelist: '', ...(ocrConfig.params || {}) });
     this.onProgress = onProgress;
-    let { data } = await w.recognize(prep.canvas, {}, { text: true, blocks: true });
+    // Tesseract leest het best als de letters groot genoeg zijn: vergroten tot de regelafstand ongeveer
+    // ocrConfig.lineHeight pixels is (een liggende 4K-opname van een open boek heeft er zo'n 40).
+    const sp = lineSpacing(prep.gray);
+    const up = ocrConfig.upscale || (sp && ocrConfig.lineHeight ? Math.min(2.5, Math.max(1, ocrConfig.lineHeight / sp)) : 1);
+    if (globalThis.__dbg) console.log('[ocr] regelafstand', sp, 'vergroting', up.toFixed(2));
+    let { data } = await w.recognize(up !== 1 ? scaleCanvas(prep.canvas, up) : prep.canvas, {}, { text: true, blocks: true });
+    if (up !== 1) scaleBoxes(data.blocks, 1 / up);
     this.onProgress = null;
     markStyles(data.blocks, prep.gray);
-    let text = data.blocks ? buildText(data.blocks, { dropCaps: prep.dropCaps }) : tidy(data.text || '');
+    const freq = this.lang?.split('+').includes('nld') ? await loadWordFreq() : null;
+    let text = data.blocks ? buildText(data.blocks, { dropCaps: prep.dropCaps, freq }) : tidy(data.text || '');
     let confidence = data.confidence;
     // Weinig of onzekere tekst (omslag, kaders, tekst rond een plaatje)? Probeer losse-tekstmodus,
     // zowel op de gewone als op de omgekeerde versie (lichte letters op een donkere ondergrond).

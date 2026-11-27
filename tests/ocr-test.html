@@ -4,7 +4,8 @@
 <p>Testpagina voor de tekstherkenning. Wordt gebruikt door <code>tests/run-ocr-tests.mjs</code>.</p>
 <script src="../vendor/tesseract/tesseract.min.js"></script>
 <script type="module">
-  import { ocr, prepareForOcr, resizeToBlob } from '../ocr.js';
+  import { ocr, prepareForOcr, resizeToBlob, ocrConfig } from '../ocr.js';
+  window.setConfig = (c) => Object.assign(ocrConfig, c);
   window.runOcr = async (url, lang = 'nld') => {
     const blob = await (await fetch(url)).blob();
     const t = performance.now();
@@ -25,7 +26,7 @@
     const S = await import('../scan.js');
     const { loadImage } = await import('../ocr.js');
     const im = await loadImage(await (await fetch(url)).blob());
-    const sc = Math.min(1, 2200 / Math.max(im.naturalWidth, im.naturalHeight));
+    const sc = Math.min(1, ocrConfig.maxSide / Math.max(im.naturalWidth, im.naturalHeight));
     const c = document.createElement('canvas');
     c.width = Math.round(im.naturalWidth * sc); c.height = Math.round(im.naturalHeight * sc);
     c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
