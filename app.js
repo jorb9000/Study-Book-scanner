@@ -226,9 +226,25 @@ async function route() {
 }
 window.addEventListener('hashchange', route);
 
+/** Groot scherm met muis (de Mac): actieknoppen niet onderaan het scherm, maar bovenin bij de titel. */
+const WIDE = matchMedia('(min-width: 760px) and (pointer: fine)');
+
 function render(html) {
   app.innerHTML = html;
   app.firstElementChild?.classList.add('enter');
+  if (WIDE.matches) placeDock();
+}
+
+function placeDock() {
+  const dock = app.querySelector(':scope > .dock'), view = app.querySelector(':scope > .view');
+  if (!dock || !view) return;
+  dock.classList.add('dock-inline');
+  // Formulier: de knop hoort onder de velden, zoals gebruikelijk op de computer.
+  if (dock.querySelector('[type=submit]')) { view.append(dock); return; }
+  // Anders bovenin: onder de titel (en de regel eronder, zoals de taal van een boek).
+  let at = view.querySelector(':scope > .h1') || view.querySelector(':scope > .top');
+  if (at && at.classList.contains('h1') && at.nextElementSibling?.matches('p')) at = at.nextElementSibling;
+  if (at) at.after(dock); else view.prepend(dock);
 }
 
 /* ---------- Weergaven ---------- */
