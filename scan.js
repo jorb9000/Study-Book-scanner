@@ -738,3 +738,42 @@ export function cropForOcr(img, box, targetH = 48) {
 export function whiteOut({ g, W }, box) {
   for (let y = box.y0; y < box.y1; y++) g.fill(255, y * W + box.x0, y * W + box.x1);
 }
+
+/* ---------- 7. Cursief en vet ---------- */
+
+/** Meet per woord (bbox in pixels van img) hoe schuin de letters staan en hoe dik de lijnen zijn.
+    Geeft per woord { slant, stroke } terug, of null als het woord te klein of leeg is.
+    slant: de afschuiving (tan van de hoek) waarbij de verticale lijnen het scherpst rechtop staan.
+    stroke: gemiddelde lengte van horizontale inktstukjes in pixels (≈ lijndikte). */
+export function measureWords({ g, W, H }, boxes) {
+  const shears = [-0.1, -0.05, 0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35];
+  return boxes.map((b) => {
+    const x0 = Math.max(0, Math.floor(b.x0)), x1 = Math.min(W - 1, Math.ceil(b.x1));
+    const y0 = Math.max(0, Math.floor(b.y0)), y1 = Math.min(H - 1, Math.ceil(b.y1));
+    const h = y1 - y0 + 1, w = x1 - x0 + 1;
+    if (h < 10 || w < h * 0.8) return null;
+    const pad = Math.ceil(h * 0.4);
+    const hist = new Float64Array(w + 2 * pad + 2);
+    const scores = [];
+    let n = 0;
+    for (const s of shears) {
+      hist.fill(0);
+      for (let y = y0; y <= y1; y++) {
+        const off = s * (y1 - y) ; // bovenkant naar links schuiven: schuine letters komen rechtop
+        for (let x = x0; x <= x1; x++) if (g[y * W + x] < 128) { hist[Math.round(x - x0 - off + pad)]++; if (s === 0) n++; }
+      }
+      let v = 0; for (let i = 0; i < hist.length; i++) v += hist[i] * hist[i];
+      scores.push(v);
+    }
+    if (n < h * 3) return null;
+    let bi = 0; for (let i = 1; i < scores.length; i++) if (scores[i] > scores[bi]) bi = i;
+    const upright = scores[shears.indexOf(0)];
+    // Lijndikte: gemiddelde lengte van inktstukjes per rij.
+    let runs = 0, ink = 0;
+    for (let y = y0; y <= y1; y++) {
+      let prev = false;
+      for (let x = x0; x <= x1; x++) { const on = g[y * W + x] < 128; if (on) ink++; if (on && !prev) runs++; prev = on; }
+    }
+    return { slant: shears[bi], gain: scores[bi] / Math.max(1, upright), stroke: runs ? ink / runs : 0, h };
+  });
+}
