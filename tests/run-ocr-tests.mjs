@@ -50,11 +50,21 @@ for (const name of names) {
   const found = want.filter(w => got.has(w)).length;
   const recall = want.length ? Math.round((100 * found) / want.length) : 100;
   const missing = (exp.contains || []).filter(s => !res.text.includes(s));
+  // Open boek: staat elke tekst op de juiste pagina? (Lege pagina of beide pagina's in één = fout.)
+  if (exp.pages) {
+    const got = (res.pages || []).map(p => p.text || '');
+    if (got.length !== exp.pages.length) missing.push(`${exp.pages.length} pagina's (nu: ${got.length})`);
+    exp.pages.forEach((want, i) => {
+      for (const s of want.has || []) if (!(got[i] || '').includes(s)) missing.push(`pagina ${i + 1} bevat ${JSON.stringify(s)}`);
+      for (const s of want.not || []) if ((got[i] || '').includes(s)) missing.push(`pagina ${i + 1} bevat niet ${JSON.stringify(s)}`);
+    });
+  }
   if (exp.startsWith && !res.text.startsWith(exp.startsWith)) missing.push(`begint met ${exp.startsWith} (nu: ${res.text.slice(0, 40)})`);
   const ok = recall >= (exp.minRecall ?? 90) && !missing.length;
   if (!ok) failed++;
   console.log(`${ok ? 'OK  ' : 'FOUT'} ${name}: woorden ${recall}%, zekerheid ${res.confidence}%, ${res.ms} ms`);
   for (const m of missing) console.log(`     ontbreekt: ${JSON.stringify(m)}`);
+  if (process.env.PAGES && res.pages) res.pages.forEach((p, i) => console.log(`     p${i + 1}: ${(p.text || '').replace(/\s+/g, ' ').slice(0, 90)} … ${(p.text || '').replace(/\s+/g, ' ').slice(-60)}`));
 }
 await browser.close();
 server.close();

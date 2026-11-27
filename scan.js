@@ -309,6 +309,25 @@ export function cropSides(img) {
   return { img: { g: out, W: img.W, H: img.H }, cropped: true };
 }
 
+/**
+ * Knipt het boek uit een foto met veel omgeving (de lamp: bureau, lampkap, schaduw, hand).
+ * Gebeurt vóór het zoeken naar de rug, anders kan die de rand van de lampkap voor de rug aanzien.
+ * Geeft de uitsnede { x, y, w, h } terug, of null als er niets te winnen is.
+ */
+export function bookCrop(img) {
+  const f = Math.max(1, Math.round(Math.max(img.W, img.H) / 480));
+  const small = shrink(img, f);
+  const b = findBookBox(small);
+  if (!b) return null;
+  // Ruime marge: liever een strook bureau mee dan een regel tekst kwijt.
+  const m = 0.04 * Math.max(b.w, b.h);
+  const box = { x: (b.x - m) * f, y: (b.y - m) * f, w: (b.w + 2 * m) * f, h: (b.h + 2 * m) * f };
+  box.x = Math.max(0, box.x); box.y = Math.max(0, box.y);
+  box.w = Math.min(img.W - box.x, box.w); box.h = Math.min(img.H - box.y, box.h);
+  if (box.w * box.h > 0.85 * img.W * img.H) return null;
+  return box;
+}
+
 /* ---------- 2b. Twee pagina's tegelijk (open boek) en kwartslagen ---------- */
 
 /** Zoekt de rug tussen twee pagina's (een liggende foto van een open boek).

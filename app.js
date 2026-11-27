@@ -755,6 +755,32 @@ async function viewReview(id) {
 let deskJob = Promise.resolve();   // herkenning die op de achtergrond loopt
 
 /** Opnames van de lamp die bij dit boek horen, op volgorde van opname. */
+/** Woorden (vanaf 4 letters) van een tekst, om opnames met elkaar te vergelijken. */
+const wordSet = (t) => new Set(((t || '').toLowerCase().match(/\p{L}{4,}/gu) || []));
+
+/** Hoeveel van de woorden van de kleinste tekst ook in de andere staan (0–1). */
+function overlap(a, b) {
+  const A = wordSet(a), B = wordSet(b);
+  if (Math.min(A.size, B.size) < 15) return 0;
+  let n = 0;
+  for (const w of A) if (B.has(w)) n++;
+  return n / Math.min(A.size, B.size);
+}
+
+/**
+ * Tekst van de vorige opname: de opname ervoor in de lijst, anders wat nu nagekeken wordt,
+ * anders de laatst opgeslagen pagina's. Om dubbele opnames (zelfde pagina's, niet omgeslagen) te vinden.
+ */
+async function previousText(bookId, shotId) {
+  const before = (await inboxOf(bookId)).filter(s => s.id < shotId && s.status === 'done').pop();
+  if (before) return [before.text, before.text2].filter(Boolean).join('\n');
+  const draft = await db.get('drafts', bookId);
+  if (draft && draft.text) return [draft.text, draft.text2].filter(Boolean).join('\n');
+  const pages = (await db.pagesOf(bookId)).filter(p => p.savedAt).sort((x, y) => y.savedAt - x.savedAt);
+  if (!pages.length) return '';
+  return pages.filter(p => pages[0].savedAt - p.savedAt < 2000).map(p => p.text).join('\n');
+}
+
 async function inboxOf(bookId) {
   return (await shots.all()).filter(s => s.bookId === bookId).sort((a, b) => a.id - b.id);
 }
@@ -1028,6 +1054,13 @@ async function viewDesk(id) {
             text2: res.pages && res.pages.length === 2 ? res.pages[1].text : null,
           });
         } else cur.status = 'error';
+        // Dezelfde pagina's als de vorige opname (niet omgeslagen)? Dan niet nog eens nakijken.
+        if (res && overlap([cur.text, cur.text2].filter(Boolean).join('\n'), await previousText(id, cur.id)) >= 0.7) {
+          await shots.del(cur.id);
+          toast('Dubbele opname weggelaten: dezelfde pagina\'s als de vorige');
+          await drawInbox();
+          continue;
+        }
         await shots.put(cur);
         if (res && !turn.manual && res.confidence >= 60) setTurn(res.rotated || 0, false);
         await drawInbox();
