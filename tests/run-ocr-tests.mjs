@@ -39,7 +39,7 @@ const words = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s
 let failed = 0;
 for (const name of names) {
   const file = (await readdir(join(root, 'tests/fixtures'))).find(f => f.replace(/\.\w+$/, '') === name);
-  const res = await page.evaluate(([u]) => window.runOcr(u), [`/tests/fixtures/${file}`]);
+  const res = await page.evaluate(([u, d]) => { globalThis.__dbg = d; return window.runOcr(u); }, [`/tests/fixtures/${file}`, !!process.env.DBG]);
   const prep = await page.evaluate(([u]) => window.prepared(u), [`/tests/fixtures/${file}`]);
   await writeFile(join(root, `tests/out/${name}.md`), res.text + '\n');
   for (let i = 0; i < prep.length; i++) {
@@ -51,6 +51,7 @@ for (const name of names) {
   const found = want.filter(w => got.has(w)).length;
   const recall = want.length ? Math.round((100 * found) / want.length) : 100;
   const missing = (exp.contains || []).filter(s => !res.text.includes(s));
+  for (const s of exp.notContains || []) if (res.text.includes(s)) missing.push(`mag niet voorkomen: ${s}`);
   if (exp.startsWith && !res.text.startsWith(exp.startsWith)) missing.push(`begint met ${exp.startsWith} (nu: ${res.text.slice(0, 40)})`);
   // Open boek: staat elke tekst op de juiste pagina? (Lege pagina of beide pagina's in één = fout.)
   if (pageExp[name]) {
