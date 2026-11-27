@@ -3,6 +3,7 @@
 
 import { ocr, ocrConfig, resizeToBlob } from './ocr.js';
 import { shots, host, toBlob } from './koppel.js';
+import { grayFromCanvas, findBookBox } from './scan.js';
 
 // Op de computer foto's minder verkleinen: 4K-opnames van de lamp blijven dan scherp genoeg.
 if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) ocrConfig.maxSide = 4096;
@@ -831,13 +832,15 @@ async function viewDesk(id) {
             </div>
           </div>
           <figure class="live" id="live-wrap" hidden>
-            <img id="live" alt="Live beeld van de iPhone">
+            <canvas id="live" role="img" aria-label="Live beeld van de iPhone"></canvas>
           </figure>
           <div class="desk-bar">
             <span class="pill" id="link-state">niet gekoppeld</span>
             <span class="pill" id="cam-state" hidden></span>
             <span class="pill pill-warn" id="res-warn" hidden>camera levert geen 4K</span>
             <span class="spacer"></span>
+            <button class="btn btn-quiet" data-act="zoom" id="zoom" title="Inzoomen op het boek (alleen in dit beeld; de opname blijft het hele beeld)">Inzoomen <kbd>Z</kbd></button>
+            <button class="btn btn-quiet" data-act="turn" id="turn" title="Live beeld een kwartslag draaien">${icon('rotate')} Draaien <kbd>R</kbd></button>
             <button class="btn btn-quiet" data-act="auto" id="auto" disabled>Auto aan <kbd>A</kbd></button>
             <button class="btn btn-primary" data-act="shoot" id="shoot" disabled>Opnemen <kbd>spatie</kbd></button>
           </div>
@@ -857,8 +860,58 @@ async function viewDesk(id) {
   `);
 
   let alive = true;
-  let liveUrl = null;
+  let lastFrame = null;
   const urls = [];
+  // Hoe het live beeld gedraaid wordt. Vanzelf uit de eerste herkende opname, of met de hand (onthouden).
+  let turn = (() => { try { return JSON.parse(localStorage.getItem('boekscanner-lampdraai')) || { deg: 0, manual: false }; } catch { return { deg: 0, manual: false }; } })();
+  const setTurn = (deg, manual) => {
+    turn = { deg: ((deg % 360) + 360) % 360, manual: manual || turn.manual };
+    localStorage.setItem('boekscanner-lampdraai', JSON.stringify(turn));
+    if (lastFrame) drawFrame(lastFrame);
+  };
+  // Inzoomen op het boek: alleen de weergave, de camera blijft op 1x en de opname is het hele beeld.
+  let zoomOn = localStorage.getItem('boekscanner-lampzoom') !== 'uit';
+  let box = null;   // gladgestreken uitsnede { x, y, w, h } in pixels van het voorbeeldbeeld
+  const probe = document.createElement('canvas');
+  const setZoom = (on) => {
+    zoomOn = on;
+    localStorage.setItem('boekscanner-lampzoom', on ? 'aan' : 'uit');
+    $('#zoom').classList.toggle('btn-on', on);
+    if (lastFrame) drawFrame(lastFrame);
+  };
+  function trackBook(bmp) {
+    const k = 480 / Math.max(bmp.width, bmp.height);
+    probe.width = Math.round(bmp.width * k); probe.height = Math.round(bmp.height * k);
+    probe.getContext('2d', { willReadFrequently: true }).drawImage(bmp, 0, 0, probe.width, probe.height);
+    const b = findBookBox(grayFromCanvas(probe));
+    if (!b) return;
+    // Wat ruimte eromheen, en binnen het beeld blijven.
+    const m = 0.03 * Math.max(b.w, b.h);
+    let x = Math.max(0, b.x - m), y = Math.max(0, b.y - m);
+    const r = { x: x / k, y: y / k, w: (Math.min(probe.width, b.x + b.w + m) - x) / k, h: (Math.min(probe.height, b.y + b.h + m) - y) / k };
+    if (!box) { box = r; return; }
+    // Rustig volgen: kleine verschuivingen negeren, grotere geleidelijk overnemen.
+    const d = Math.max(Math.abs(r.x - box.x), Math.abs(r.y - box.y), Math.abs(r.w - box.w), Math.abs(r.h - box.h));
+    if (d < 0.03 * Math.max(bmp.width, bmp.height)) return;
+    for (const key of ['x', 'y', 'w', 'h']) box[key] += (r[key] - box[key]) * 0.35;
+  }
+  function drawFrame(bmp) {
+    const c = $('#live');
+    if (!c) return;
+    const src = zoomOn && box ? box : { x: 0, y: 0, w: bmp.width, h: bmp.height };
+    // Niet kleiner tekenen dan het beeld was: bij inzoomen schalen we op tot de oorspronkelijke grootte.
+    const scale = Math.max(bmp.width, bmp.height) / Math.max(src.w, src.h);
+    const w = Math.round(src.w * scale), h = Math.round(src.h * scale);
+    const side = turn.deg % 180 !== 0;
+    c.width = side ? h : w;
+    c.height = side ? w : h;
+    const g = c.getContext('2d');
+    g.save();
+    g.translate(c.width / 2, c.height / 2);
+    g.rotate((turn.deg * Math.PI) / 180);
+    g.drawImage(bmp, src.x, src.y, src.w, src.h, -w / 2, -h / 2, w, h);
+    g.restore();
+  }
   const linkState = $('#link-state'), camState = $('#cam-state');
 
   const setLinked = (on) => {
@@ -900,10 +953,13 @@ async function viewDesk(id) {
       if (m.t === 'hello') { setAuto(!!m.auto); return; }
       if (m.t === 'preview') {
         if (m.img) {
-          const u = URL.createObjectURL(toBlob(m.img));
-          $('#live').src = u;
-          if (liveUrl) URL.revokeObjectURL(liveUrl);
-          liveUrl = u;
+          createImageBitmap(toBlob(m.img)).then((bmp) => {
+            if (!alive) return bmp.close();
+            if (lastFrame) lastFrame.close();
+            lastFrame = bmp;
+            trackBook(bmp);
+            drawFrame(bmp);
+          }).catch(() => {});
         }
         $('#pair').hidden = true;
         $('#live-wrap').hidden = false;
@@ -914,6 +970,7 @@ async function viewDesk(id) {
       }
     },
   };
+  $('#zoom').classList.toggle('btn-on', zoomOn);
   if (d.code) d.ui.ready(d.code);
   if (link.connected) setLinked(true);
 
@@ -931,7 +988,7 @@ async function viewDesk(id) {
     $('#review').disabled = !items.length;
     urls.splice(0).forEach(u => URL.revokeObjectURL(u));
     $('#inbox').innerHTML = items.length ? items.map((s, i) => {
-      const u = URL.createObjectURL(s.image); urls.push(u);
+      const u = URL.createObjectURL((s.status === 'done' && s.rotated) || s.image); urls.push(u);
       const st = s.status === 'done' ? `klaar · ${s.confidence ?? '?'}% zeker`
         : s.status === 'busy' ? `herkennen… <span data-prog="${s.id}"></span>`
         : s.status === 'error' ? 'herkennen mislukt' : 'wacht';
@@ -972,6 +1029,7 @@ async function viewDesk(id) {
           });
         } else cur.status = 'error';
         await shots.put(cur);
+        if (res && !turn.manual && res.confidence >= 60) setTurn(res.rotated || 0, false);
         await drawInbox();
       }
     } finally { working = false; }
@@ -981,6 +1039,8 @@ async function viewDesk(id) {
     if (e.target.closest('input, textarea')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.code === 'Space') { e.preventDefault(); if (link.connected) link.send({ t: 'capture' }); }
+    if (e.code === 'KeyR') setTurn(turn.deg + 90, true);
+    if (e.code === 'KeyZ') setZoom(!zoomOn);
     if (e.code === 'KeyA' && link.connected) { const on = !$('#auto').dataset.on; setAuto(on); link.send({ t: 'auto', on }); }
   };
   const onClick = async (e) => {
@@ -988,6 +1048,8 @@ async function viewDesk(id) {
     if (!el) return;
     const act = el.dataset.act;
     if (act === 'shoot') return link.send({ t: 'capture' });
+    if (act === 'turn') return setTurn(turn.deg + 90, true);
+    if (act === 'zoom') return setZoom(!zoomOn);
     if (act === 'auto') { const on = !el.dataset.on; setAuto(on); return link.send({ t: 'auto', on }); }
     if (act === 'del-shot') { await shots.del(+el.dataset.id); return drawInbox(); }
     if (act === 'review') {
@@ -1002,7 +1064,7 @@ async function viewDesk(id) {
     d.ui = null;   // de verbinding blijft open, zodat opnames binnenkomen terwijl je nakijkt
     document.removeEventListener('keydown', onKey);
     app.removeEventListener('click', onClick);
-    if (liveUrl) URL.revokeObjectURL(liveUrl);
+    if (lastFrame) lastFrame.close();
     urls.forEach(u => URL.revokeObjectURL(u));
   };
 
