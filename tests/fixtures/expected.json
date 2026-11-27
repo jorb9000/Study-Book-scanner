@@ -110,24 +110,6 @@
   "contains": [
    "Boven mijn jongensbed hing een Sumatraanse tijger",
    "het oerwoud geveld door mijn grootvader"
-  ],
-  "pages": [
-   {
-    "has": [
-     "catacomben"
-    ],
-    "not": [
-     "jongensbed"
-    ]
-   },
-   {
-    "has": [
-     "jongensbed"
-    ],
-    "not": [
-     "catacomben"
-    ]
-   }
   ]
  },
  "k2": {
@@ -137,24 +119,6 @@
    "Ondoordringbare oerwouden",
    "Mijn dromen werden in de hand gewerkt",
    "Schokkende dingen zijn er in die jaren niet gebeurd"
-  ],
-  "pages": [
-   {
-    "has": [
-     "tijgerkop"
-    ],
-    "not": [
-     "Schokkende"
-    ]
-   },
-   {
-    "has": [
-     "Schokkende"
-    ],
-    "not": [
-     "tijgerkop"
-    ]
-   }
   ]
  },
  "k3": {
@@ -163,24 +127,6 @@
   "contains": [
    "Mijn Indië-gekte",
    "ziekenhuisbed dat geplaatst"
-  ],
-  "pages": [
-   {
-    "has": [
-     "glibberig"
-    ],
-    "not": [
-     "ziekenhuisbed"
-    ]
-   },
-   {
-    "has": [
-     "ziekenhuisbed"
-    ],
-    "not": [
-     "glibberig"
-    ]
-   }
   ]
  },
  "k4": {
@@ -196,24 +142,6 @@
   "words": "",
   "contains": [
    "in 1848 behaald"
-  ],
-  "pages": [
-   {
-    "has": [
-     "Besoeki bracht"
-    ],
-    "not": [
-     "Thorbecke"
-    ]
-   },
-   {
-    "has": [
-     "Thorbecke"
-    ],
-    "not": [
-     "Besoeki bracht"
-    ]
-   }
   ]
  },
  "m010": {
@@ -221,24 +149,6 @@
   "words": "",
   "contains": [
    "Ik moet onder die imposante tijgerkop"
-  ],
-  "pages": [
-   {
-    "has": [
-     "tijgerkop"
-    ],
-    "not": [
-     "Schokkende"
-    ]
-   },
-   {
-    "has": [
-     "Schokkende"
-    ],
-    "not": [
-     "tijgerkop"
-    ]
-   }
   ]
  },
  "m011": {
@@ -246,24 +156,6 @@
   "words": "",
   "contains": [
    "het punt de Adipati stevig aan te pakken"
-  ],
-  "pages": [
-   {
-    "has": [
-     "Adipati"
-    ],
-    "not": [
-     "complexe probleem"
-    ]
-   },
-   {
-    "has": [
-     "complexe probleem"
-    ],
-    "not": [
-     "Adipati"
-    ]
-   }
   ]
  },
  "m013": {

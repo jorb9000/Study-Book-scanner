@@ -143,8 +143,7 @@ export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
     const centered = Math.abs((l.x0 + l.x1) / 2 - (m.left + m.right) / 2) < width * 0.05 && l.x1 - l.x0 < width * 0.8
       && l.x0 > m.left + width * 0.06;
     l.kind = 'text';
-    // Een kop heeft letters: een los paginanummer of getal uit een inhoudsopgave is geen kop.
-    const headingLike = l.words <= 14 && !/[,;]$/.test(l.text) && /\p{L}{2,}/u.test(l.text);
+    const headingLike = l.words <= 14 && !/[,;]$/.test(l.text);
     if (rel >= 1.35 && headingLike) l.kind = rel >= 1.6 ? 'h2' : 'h3';
     else if (rel >= 1.18 && l.words <= 8 && headingLike && !/[.!?]$/.test(l.text)) l.kind = 'h3';
     else if (l.bullet || LIST_RE.test(l.text)) l.kind = 'item';
