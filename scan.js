@@ -114,6 +114,79 @@ export function findPage(img) {
   return quad.map(([x, y]) => [x + (cx - x) * shrinkIn * 2, y + (cy - y) * shrinkIn * 2]);
 }
 
+/**
+ * Ruwe rechthoek om de bedrukte pagina's, voor het inzoomen van het live beeld.
+ * Zoekt vakjes met tekst (licht papier met veel fijne contrasten). Een effen lampkap,
+ * het bureau of een hand tellen daardoor niet mee. Geeft { x, y, w, h } in pixels van img, of null.
+ */
+export function findBookBox(img) {
+  const { g, W, H } = img;
+  const c = Math.max(4, Math.round(Math.max(W, H) / 60));   // vakjesgrootte
+  const cw = Math.floor(W / c), ch = Math.floor(H / c);
+  if (cw < 8 || ch < 8) return null;
+  // Drempel tussen ondergrond en papier. Bewust laag: de lamp verlicht de ene pagina
+  // veel feller dan de andere, en ook de donkere pagina moet meetellen.
+  const hist = new Uint32Array(256); for (let i = 0; i < g.length; i++) hist[g[i]]++;
+  const pct = (q) => { let n = 0; for (let v = 0; v < 256; v++) { n += hist[v]; if (n >= q * g.length) return v; } return 255; };
+  const lo = pct(0.1), hi = pct(0.95);
+  if (hi - lo < 40) return null;
+  const t = lo + (hi - lo) * 0.25;
+  const text = new Uint8Array(cw * ch);
+  for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++) {
+    let sum = 0, edge = 0;
+    for (let y = cy * c; y < cy * c + c; y++) for (let x = cx * c; x < cx * c + c; x++) {
+      const p = y * W + x;
+      sum += g[p];
+      if (x + 1 < W) edge += Math.abs(g[p] - g[p + 1]);
+      if (y + 1 < H) edge += Math.abs(g[p] - g[p + W]);
+    }
+    const mean = sum / (c * c), e = edge / (c * c);
+    text[cy * cw + cx] = mean > t && e > 6 ? 1 : 0;
+  }
+  // Reeks rijen/kolommen met genoeg tekstvakjes. Gaten tot 15% (de rug, witregels) mogen;
+  // van de reeksen telt die met de meeste tekst.
+  const run = (counts, min) => {
+    const maxGap = Math.max(2, Math.round(counts.length * 0.15));
+    let best = null, cur = null, gap = 0;
+    const close = () => { if (cur && (!best || cur.n > best.n)) best = cur; cur = null; };
+    for (let i = 0; i < counts.length; i++) {
+      if (counts[i] >= min) {
+        if (cur) cur.end = i; else cur = { start: i, end: i, n: 0 };
+        cur.n += counts[i]; gap = 0;
+      } else if (cur && ++gap > maxGap) { close(); gap = 0; }
+    }
+    close();
+    return best && [best.start, best.end];
+  };
+  const cols = new Array(cw).fill(0), rows = new Array(ch).fill(0);
+  for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++) if (text[cy * cw + cx]) { cols[cx]++; rows[cy]++; }
+  const xr = run(cols, Math.max(2, ch * 0.15)), yr = run(rows, Math.max(2, cw * 0.15));
+  if (!xr || !yr) return null;
+  // Uitbreiden zolang de rand ernaast vooral (bedrukt) papier is: zo komen ook flauwe
+  // tekst in het felle licht en de paginamarge mee, maar niet het bureau of de schaduw.
+  let [x0, x1] = xr, [y0, y1] = yr;
+  const paper = (cx0, cx1, cy0, cy1) => {
+    let on = 0, n = 0;
+    for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) {
+      n++;
+      let sum = 0;
+      for (let y = cy * c; y < cy * c + c; y += 2) for (let x = cx * c; x < cx * c + c; x += 2) sum += g[y * W + x];
+      if (sum / Math.ceil(c / 2) ** 2 > t) on++;
+    }
+    return n && on / n > 0.6;
+  };
+  for (let grew = true; grew;) {
+    grew = false;
+    if (y0 > 0 && paper(x0, x1, y0 - 1, y0 - 1)) { y0--; grew = true; }
+    if (y1 < ch - 1 && paper(x0, x1, y1 + 1, y1 + 1)) { y1++; grew = true; }
+    if (x0 > 0 && paper(x0 - 1, x0 - 1, y0, y1)) { x0--; grew = true; }
+    if (x1 < cw - 1 && paper(x1 + 1, x1 + 1, y0, y1)) { x1++; grew = true; }
+  }
+  const box = { x: x0 * c, y: y0 * c, w: (x1 - x0 + 1) * c, h: (y1 - y0 + 1) * c };
+  if (box.w * box.h < 0.08 * W * H) return null;
+  return box;
+}
+
 /** Homografie die (0,0),(w,0),(w,h),(0,h) afbeeldt op de vier hoeken. */
 function homography(w, h, q) {
   const src = [[0, 0], [w, 0], [w, h], [0, h]];

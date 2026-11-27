@@ -15,7 +15,7 @@ Zet de iPhone via MagSafe op een bureaulamp, **liggend**, met de lens vrij over 
 1. Open de Boekscanner op je computer en klik op **Nieuw boek**. Vul de titel in, de eerste pagina en eventueel de laatste pagina, en kies de taal.
 2. Klik op **Scannen met de lamp**. Er verschijnt een QR-code.
 3. Richt de **Camera-app** van je iPhone op de QR-code en tik op de link. Tik daarna één keer op het scherm van de iPhone en leg hem op de lamp. Een volgende keer kun je de pagina gewoon weer openen: hij onthoudt de koppeling.
-4. Op de computer zie je het live beeld. Blader om en houd stil: de iPhone neemt vanzelf op. Of druk op de **spatiebalk**. Met **A** zet je automatisch opnemen aan of uit.
+4. Op de computer zie je het live beeld. Blader om en houd stil: de iPhone neemt vanzelf op. Of druk op de **spatiebalk**. Met **A** zet je automatisch opnemen aan of uit. Met **R** (of **Draaien**) draai je het live beeld een kwartslag; na de eerste herkende opname gebeurt dat vanzelf. Met **Z** (**Inzoomen**) zoomt het beeld in op de pagina's. Dat is alleen de weergave: de iPhone blijft op 1x en de opname is altijd het hele beeld.
 5. Elke opname komt direct op de computer binnen en wordt op de achtergrond herkend. Met **Nakijken en opslaan** loop je ze één voor één door. Een opname van een open boek wordt twee pagina's.
 6. Stoppen mag op elk moment. De volgende keer staat het boek al op de juiste pagina.
 
