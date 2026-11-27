@@ -240,19 +240,45 @@ export function cropSides(img) {
 
 /** Zoekt de rug tussen twee pagina's (een liggende foto van een open boek).
     Geeft de x van de rug terug, of null als er maar één pagina op staat. */
-export function findGutter(img) {
+export function findGutter(img, photo = null) {
   const { W: W0, H: H0 } = img;
   if (W0 < H0 * 1.1) return null;
-  const f = 4;
-  const { g, W, H } = shrink(img, f);
+  const sm = shrink(img, 4);
+  // Eerst: een strook zonder tekst tussen de pagina's. Lukt dat niet (kleine letters, schaduw in de
+  // rug), dan de schaduw van de vouw zelf: een smal, donkerder dal in de helderheid van de foto.
+  let x = gutterPass(sm, 0, 0.06);
+  if (x == null && photo) x = foldValley(shrink(photo, 4));
+  return x == null ? null : Math.round(x * 4);
+}
+
+function foldValley({ g, W, H }) {
+  const y0 = Math.round(H * 0.15), y1 = Math.round(H * 0.85);
+  const b = new Float64Array(W);
+  for (let x = 0; x < W; x++) { let s = 0; for (let y = y0; y < y1; y++) s += g[y * W + x]; b[x] = s / (y1 - y0); }
+  const r = Math.max(1, Math.round(W * 0.003));
+  const sb = b.map((_, x) => { let v = 0, n = 0; for (let d = -r; d <= r; d++) if (x + d >= 0 && x + d < W) { v += b[x + d]; n++; } return v / n; });
+  const win = Math.round(W * 0.04);
+  let best = null, bd = 0;
+  for (let x = Math.round(W * 0.3); x <= Math.round(W * 0.7); x++) {
+    let ml = 0, mr = 0;
+    for (let d = 1; d <= win; d++) { ml = Math.max(ml, sb[x - d] ?? 0); mr = Math.max(mr, sb[x + d] ?? 0); }
+    const dip = Math.min(ml, mr) / Math.max(1, sb[x]) - 1;
+    if (dip > bd) { bd = dip; best = x; }
+  }
+  // Pagina's zelf moeten licht zijn, en het dal duidelijk.
+  return best != null && bd >= 0.08 && sb[best] > 60 ? best : null;
+}
+
+function gutterPass({ g, W, H }, edge, lowF) {
   // Lange staande lijnen (vouw, schaduw van de rug, paginarand) tellen niet als tekst.
   const col = new Float64Array(W);
   const maxRun = H * 0.08;
+  const yA = Math.round(H * edge), yB = H - yA;
   for (let x = 0; x < W; x++) {
-    let y = 0;
-    while (y < H) {
+    let y = yA;
+    while (y < yB) {
       if (g[y * W + x] >= 140) { y++; continue; }
-      let e = y; while (e < H && g[e * W + x] < 140) e++;
+      let e = y; while (e < yB && g[e * W + x] < 140) e++;
       if (e - y < maxRun) col[x] += e - y;
       y = e;
     }
@@ -262,7 +288,7 @@ export function findGutter(img) {
   const inked = Array.from(sm).filter(v => v > 0).sort((p, q) => p - q);
   if (!inked.length) return null;
   const typical = inked[Math.floor(inked.length * 0.75)];
-  const low = typical * 0.06;
+  const low = typical * lowF;
   // Langste leeg stuk in het middengebied.
   let best = null, start = -1;
   const a = Math.round(W * 0.25), b = Math.round(W * 0.75);
@@ -276,7 +302,7 @@ export function findGutter(img) {
   let left = 0, right = 0;
   for (let x = 0; x < W; x++) (x < mid ? (left += col[x]) : (right += col[x]));
   if (Math.min(left, right) < (left + right) * 0.15) return null;
-  return Math.round(mid * f);
+  return mid;
 }
 
 /** Knipt een stuk [x0, x1) uit een grijsbeeld. */
