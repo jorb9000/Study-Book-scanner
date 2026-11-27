@@ -286,9 +286,9 @@ export async function prepareForOcr(blob) {
   if (img.W > img.H * 1.1) {
     const a = estimateSkew(img);
     const straight = Math.abs(a) >= 0.3 ? rotate(img, a) : img;
-    const gx = findGutter(straight);
+    const sp = Math.abs(a) >= 0.3 ? rotate(photo, a) : photo;
+    const gx = findGutter(straight, sp);
     if (gx) {
-      const sp = Math.abs(a) >= 0.3 ? rotate(photo, a) : photo;
       halves = [[cropX(straight, 0, gx), cropX(sp, 0, gx)], [cropX(straight, gx, straight.W), cropX(sp, gx, sp.W)]];
       steps.push("twee pagina's");
     }
