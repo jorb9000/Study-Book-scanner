@@ -9,7 +9,6 @@ if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) ocrConfig.maxSide = 
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const app = $('#app');
-const cameraInput = $('#camera');
 const importInput = $('#import-file');
 
 const LANGS = {
@@ -169,36 +168,27 @@ function chapterRanges(book) {
   return chs.map((c, i) => ({ ...c, end: chs[i + 1] ? chs[i + 1].start - 1 : (book.totalPages || Infinity) }));
 }
 
-/* ---------- Scannen ---------- */
+/* ---------- iPhone: alleen camera ---------- */
 
-let pendingCapture = null;  // { bookId, after: Promise }
+// Op de iPhone is de Boekscanner alleen nog camera op de lamp; alles wordt op de computer bediend.
+const PHONE = /iPhone|iPod|Android/i.test(navigator.userAgent);
 
-/** Moet direct vanuit een tik worden aangeroepen (iOS eist een gebruikersgebaar). */
-function openCamera(bookId, after = Promise.resolve()) {
-  pendingCapture = { bookId, after };
-  cameraInput.value = '';
-  cameraInput.click();
+async function viewPhone() {
+  const n = (await db.all('books')).length;
+  if (!n) { location.replace('lamp.html'); return; }
+  // Oude boeken van vóór de lampopstelling: via een back-up naar de computer verhuizen.
+  render(`
+    <section class="view">
+      <header class="top"><h1 class="wordmark">Boekscanner</h1></header>
+      <p class="lead">Deze iPhone is nu alleen nog camera op de lamp. Boeken, nakijken en exporteren doe je op je computer.</p>
+      <p class="lead">Er ${n === 1 ? 'staat nog 1 boek' : `staan nog ${n} boeken`} op deze iPhone. Maak een back-up, zet het bestand in iCloud Drive en kies op je computer <strong>Back-up terugzetten</strong>.</p>
+    </section>
+    <footer class="dock">
+      <a class="btn btn-quiet btn-block" href="#/backup">Back-up maken</a>
+      <a class="btn btn-primary btn-block" href="lamp.html">Naar de camera</a>
+    </footer>
+  `);
 }
-
-cameraInput.addEventListener('change', async () => {
-  const file = cameraInput.files && cameraInput.files[0];
-  const cap = pendingCapture;
-  pendingCapture = null;
-  if (!file || !cap) return;
-  await cap.after;
-  const book = await db.get('books', cap.bookId);
-  if (!book) return;
-  const image = await resizeToBlob(file, 2200, 0.88);
-  await db.put('drafts', {
-    bookId: book.id,
-    pageNumber: book.nextPage,
-    image,
-    text: null,
-    rotate: 0,
-    createdAt: Date.now(),
-  });
-  go(`#/boek/${book.id}/scan`);
-});
 
 /* ---------- Router ---------- */
 
@@ -214,6 +204,7 @@ async function route() {
   const parts = (location.hash.replace(/^#\/?/, '').split('?')[0] || '').split('/').filter(Boolean);
   window.scrollTo(0, 0);
   try {
+    if (PHONE && parts[0] !== 'backup') return await viewPhone();
     if (!parts.length) return await viewHome();
     if (parts[0] === 'nieuw') return await viewBookForm();
     if (parts[0] === 'backup') return await viewBackup();
@@ -282,14 +273,13 @@ async function viewHome() {
           <p class="empty-lead">Scan een boek in rustige stukken. De app onthoudt waar je bent.</p>
           <ol class="steps">
             <li><span>1</span>Maak een boek aan</li>
-            <li><span>2</span>Fotografeer een pagina</li>
+            <li><span>2</span>Scan met de iPhone op de lamp</li>
             <li><span>3</span>Controleer de tekst en ga door</li>
           </ol>
         </div>`}
     </section>
     <footer class="dock">
       <a class="btn btn-primary btn-block" href="#/nieuw">${icon('plus')} Nieuw boek</a>
-      <a class="btn btn-quiet btn-block" href="lamp.html">${icon('camera')} Lampmodus (telefoon boven het boek)</a>
     </footer>
   `);
 }
@@ -409,12 +399,6 @@ async function viewBook(id) {
           <span class="chev">${icon('chev')}</span>
         </a>` : ''}
 
-      <a class="notice notice-quiet" href="#/boek/${id}/lamp">
-        <span>${icon('camera')}</span>
-        <span>Scannen met de iPhone op de lamp, bediend vanaf deze computer</span>
-        <span class="chev">${icon('chev')}</span>
-      </a>
-
       <div class="next">
         <span class="muted small">Volgende pagina</span>
         <div class="stepper">
@@ -455,12 +439,13 @@ async function viewBook(id) {
               <span class="excerpt">${esc((p.text || '').slice(0, 90)) || '<em>leeg</em>'}</span>
             </a>
           </li>`).join('')}
-        </ul>` : `<p class="muted small pad">Nog niets gescand. Leg het boek plat, zorg voor goed licht en fotografeer één pagina recht van boven.</p>`}
+        </ul>` : `<p class="muted small pad">Nog niets gescand. Leg het boek open onder de lamp en kies <strong>Scannen met de lamp</strong>.</p>`}
       </section>
     </section>
 
     <footer class="dock">
-      <button class="btn btn-primary btn-block" data-act="scan">${draft ? `Scan van p. ${draft.pageNumber} afronden` : `${icon('camera')} ${finished ? 'Pagina opnieuw scannen' : `Scan pagina ${book.nextPage}`}`}</button>
+      ${draft ? `<a class="btn btn-primary btn-block" href="#/boek/${id}/scan">Scan van p. ${draft.pageNumber} afronden</a>`
+        : `<a class="btn btn-primary btn-block" href="#/boek/${id}/lamp">${icon('camera')} Scannen met de lamp</a>`}
     </footer>
   `);
 
@@ -469,7 +454,6 @@ async function viewBook(id) {
     book.updatedAt = Date.now();
     await db.put('books', book);
     $('[data-act="next-set"]').textContent = `p. ${book.nextPage}`;
-    if (!draft) $('[data-act="scan"]').innerHTML = `${icon('camera')} Scan pagina ${book.nextPage}`;
   };
 
   app.addEventListener('click', onClick);
@@ -479,12 +463,6 @@ async function viewBook(id) {
     const el = e.target.closest('[data-act]');
     if (!el) return;
     const act = el.dataset.act;
-    if (act === 'scan') {
-      if (draft) return go(`#/boek/${id}/scan`);
-      openCamera(id); // direct binnen de tik, anders opent iOS de camera niet
-      ocr.get(book.lang).catch(() => {}); // alvast opwarmen terwijl de camera open is
-      return;
-    }
     if (act === 'next-inc') return setNext(book.nextPage + 1);
     if (act === 'next-dec') return setNext(book.nextPage - 1);
     if (act === 'goto-missing') { await setNext(+el.dataset.n); toast(`Volgende pagina: ${el.dataset.n}`); return; }
@@ -740,17 +718,11 @@ async function viewReview(id) {
       $('#photo img').src = URL.createObjectURL(draft.image);
       return runOcr(false);
     }
-    if (act === 'retake' && draft.fromLamp) {
+    if (act === 'retake') {
       book.nextPage = draft.pageNumber;
       await Promise.all([db.del('drafts', id), db.put('books', book)]);
       toast('Leg de pagina terug en neem hem opnieuw op');
       return go(`#/boek/${id}/lamp`);
-    }
-    if (act === 'retake') {
-      book.nextPage = draft.pageNumber;
-      openCamera(id, Promise.all([db.del('drafts', id), db.put('books', book)]));
-      go(`#/boek/${id}`, true); // bij annuleren van de camera sta je weer bij het boek
-      return;
     }
     if (act === 'discard') {
       if (!await confirmSheet('Scan weggooien?', 'De foto en de herkende tekst worden niet bewaard.', 'Weggooien', true)) return;
@@ -763,28 +735,13 @@ async function viewReview(id) {
       if (taken.length) {
         const title = taken.length > 1 ? `Pagina ${taken[0]} en ${taken[1]} bestaan al` : `Pagina ${taken[0]} bestaat al`;
         if (!await confirmSheet(title, 'De eerder opgeslagen tekst wordt vervangen.', 'Vervangen')) return;
-        next = false; // na een vraag mag iOS de camera niet meer openen; terug naar het boek
       }
       setButtons(false);
-      if (draft.fromLamp) {
-        // Opnames van de lamp: na opslaan meteen de volgende opname nakijken, anders terug naar het bureau.
-        await save();
-        toast(isSpread() ? `Pagina ${draft.pageNumber} en ${draft.pageNumber + 1} opgeslagen` : `Pagina ${draft.pageNumber} opgeslagen`);
-        if (next && await takeFromInbox(id)) return go(`#/boek/${id}/scan`, true);
-        return go(`#/boek/${id}/lamp`, true);
-      }
-      if (next) {
-        // Camera direct openen (iOS vereist dit binnen de tik); opslaan loopt parallel.
-        const saving = save();
-        openCamera(id, saving);
-        await saving;
-        history.replaceState(null, '', `#/boek/${id}`);
-        if (alive) route();
-      } else {
-        await save();
-        toast(isSpread() ? `Pagina ${draft.pageNumber} en ${draft.pageNumber + 1} opgeslagen` : `Pagina ${draft.pageNumber} opgeslagen`);
-        go(`#/boek/${id}`, true);
-      }
+      // Na opslaan meteen de volgende opname van de lamp nakijken, anders terug naar het bureau.
+      await save();
+      toast(isSpread() ? `Pagina ${draft.pageNumber} en ${draft.pageNumber + 1} opgeslagen` : `Pagina ${draft.pageNumber} opgeslagen`);
+      if (next && await takeFromInbox(id)) return go(`#/boek/${id}/scan`, true);
+      return go(`#/boek/${id}/lamp`, true);
     }
   };
   app.addEventListener('click', onClick);
@@ -866,10 +823,10 @@ async function viewDesk(id) {
               <h2>Koppel je iPhone</h2>
               <ol class="muted small">
                 <li>Open de Camera-app op je iPhone en richt hem op deze code.</li>
-                <li>Tik op de link die verschijnt. De lampmodus opent in Safari.</li>
-                <li>Tik op <strong>Camera starten</strong> en leg de telefoon op de lamp.</li>
+                <li>Tik op de link die verschijnt.</li>
+                <li>Tik op het scherm van de iPhone en leg hem liggend op de lamp.</li>
               </ol>
-              <p class="muted small">iPhone en computer moeten op hetzelfde wifi-netwerk zitten.</p>
+              <p class="muted small">iPhone en computer moeten op hetzelfde wifi-netwerk zitten. Al eerder gekoppeld? Open dan gewoon de Boekscanner-pagina op je iPhone weer.</p>
               <p class="muted small" id="pair-err"></p>
             </div>
           </div>
@@ -879,8 +836,9 @@ async function viewDesk(id) {
           <div class="desk-bar">
             <span class="pill" id="link-state">niet gekoppeld</span>
             <span class="pill" id="cam-state" hidden></span>
+            <span class="pill pill-warn" id="res-warn" hidden>camera levert geen 4K</span>
             <span class="spacer"></span>
-            <button class="btn btn-quiet" data-act="auto" id="auto" disabled>Auto aan</button>
+            <button class="btn btn-quiet" data-act="auto" id="auto" disabled>Auto aan <kbd>A</kbd></button>
             <button class="btn btn-primary" data-act="shoot" id="shoot" disabled>Opnemen <kbd>spatie</kbd></button>
           </div>
           <p class="muted small">Blader om en houd stil: de iPhone neemt vanzelf op. Of druk op de spatiebalk.</p>
@@ -913,7 +871,7 @@ async function viewDesk(id) {
   const setAuto = (on) => {
     const b = $('#auto');
     b.dataset.on = on ? '1' : '';
-    b.textContent = on ? 'Auto aan' : 'Auto uit';
+    b.innerHTML = (on ? 'Auto aan' : 'Auto uit') + ' <kbd>A</kbd>';
     b.classList.toggle('btn-on', on);
   };
 
@@ -952,6 +910,7 @@ async function viewDesk(id) {
         camState.hidden = !m.state;
         camState.textContent = m.state || '';
         if (typeof m.auto === 'boolean') setAuto(m.auto);
+        if (m.w) $('#res-warn').hidden = Math.max(m.w, m.h) >= 3840;
       }
     },
   };
@@ -1020,7 +979,9 @@ async function viewDesk(id) {
 
   const onKey = (e) => {
     if (e.target.closest('input, textarea')) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.code === 'Space') { e.preventDefault(); if (link.connected) link.send({ t: 'capture' }); }
+    if (e.code === 'KeyA' && link.connected) { const on = !$('#auto').dataset.on; setAuto(on); link.send({ t: 'auto', on }); }
   };
   const onClick = async (e) => {
     const el = e.target.closest('[data-act]');
@@ -1106,9 +1067,9 @@ async function viewPage(id, n) {
     if (el.dataset.act === 'copy') { await copyText(ta.value); return; }
     if (el.dataset.act === 'rescan') {
       book.nextPage = n;
-      openCamera(id, db.put('books', book));
-      ocr.get(book.lang).catch(() => {});
-      return;
+      await db.put('books', book);
+      toast(`Leg pagina ${n} onder de lamp`);
+      return go(`#/boek/${id}/lamp`);
     }
     if (el.dataset.act === 'delete') {
       if (!await confirmSheet(`Pagina ${n} verwijderen?`, 'Je kunt de pagina daarna opnieuw scannen.', 'Verwijderen', true)) return;

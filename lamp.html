@@ -5,109 +5,51 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <title>Boekscanner · lampmodus</title>
+  <title>Boekscanner · camera</title>
   <link rel="icon" href="icons/icon-192.png">
   <style>
-    :root { color-scheme: dark; --fg: #f3f1ec; --muted: #a7a39a; --accent: #e2b04a; --ok: #6cc28a; --bad: #e06a5a; }
+    :root { color-scheme: dark; }
     * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; background: #000; color: var(--fg);
-      font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-user-select: none; user-select: none; }
-    button { font: inherit; color: inherit; border: 0; border-radius: 12px; padding: 12px 16px; background: #2a2926; cursor: pointer; }
-    button.primary { background: var(--accent); color: #1a1710; font-weight: 600; }
-    button:disabled { opacity: .4; }
-    .screen { position: fixed; inset: 0; display: flex; flex-direction: column; }
+    html, body { margin: 0; height: 100%; background: #000; color: #f3f1ec; overflow: hidden;
+      font: 17px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-user-select: none; user-select: none; }
     [hidden] { display: none !important; }
-
-    /* Start */
-    #start { justify-content: center; padding: 24px; gap: 16px; max-width: 520px; margin: 0 auto; }
-    #start h1 { font-size: 24px; margin: 0; }
-    #start p, #start li { color: var(--muted); margin: 0; }
-    #start ol { padding-left: 20px; margin: 0; display: grid; gap: 6px; }
-    #start a { color: var(--accent); }
-
-    /* Camera */
-    #cam { background: #000; }
-    #video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-    #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .35s; }
+    #video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+    #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .35s; }
     #flash.on { opacity: .7; transition: none; }
-    .bar { position: absolute; left: 0; right: 0; display: flex; gap: 8px; align-items: center; padding: 10px 12px;
-      background: rgba(0,0,0,.55); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
-    .bar.top { top: 0; padding-top: max(10px, env(safe-area-inset-top)); font-size: 14px; }
-    .bar.bottom { bottom: 0; padding-bottom: max(10px, env(safe-area-inset-bottom)); justify-content: space-between; }
-    .pill { padding: 3px 9px; border-radius: 99px; background: #2a2926; white-space: nowrap; }
-    .pill.still { background: #1f3a2a; color: var(--ok); }
-    .pill.move { background: #3a2a1f; color: var(--accent); }
-    .pill.warn { background: #3a1f1f; color: var(--bad); }
-    .spacer { flex: 1; }
-    #shoot { width: 64px; height: 64px; border-radius: 50%; padding: 0; background: #fff; border: 4px solid #777; }
-    #auto.on { background: var(--ok); color: #0f2116; font-weight: 600; }
-    #stopped { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.8); text-align: center; padding: 24px; }
-
-    /* Opnames */
-    #shots { background: #111; overflow: auto; padding: 16px; padding-top: max(16px, env(safe-area-inset-top)); gap: 12px; }
-    #shots header { display: flex; gap: 8px; align-items: center; }
-    #shots h2 { margin: 0; font-size: 20px; flex: 1; }
-    #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
-    .shot { position: relative; background: #222; border-radius: 10px; overflow: hidden; }
-    .shot img { display: block; width: 100%; aspect-ratio: 4/3; object-fit: cover; }
-    .shot span { position: absolute; left: 6px; bottom: 6px; font-size: 12px; background: rgba(0,0,0,.6); padding: 2px 6px; border-radius: 6px; }
-    .shot button { position: absolute; right: 6px; top: 6px; padding: 4px 9px; font-size: 13px; background: rgba(0,0,0,.65); }
-    .row { display: flex; gap: 8px; flex-wrap: wrap; }
-    .muted { color: var(--muted); }
+    #dim { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 1s; }
+    #dim.on { opacity: .94; }
+    .status { position: fixed; top: max(14px, env(safe-area-inset-top)); left: 14px; display: flex; gap: 8px; align-items: center;
+      padding: 6px 12px 6px 10px; border-radius: 99px; background: rgba(0,0,0,.55); font-size: 14px; color: #cfcac0; }
+    .status::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: #888; }
+    .status.ok::before { background: #4cc27a; }
+    .status.wait::before { background: #e2b04a; }
+    .status.bad::before { background: #e06a5a; }
+    .screen { position: fixed; inset: 0; display: grid; place-items: center; padding: 32px; text-align: center; background: #000; }
+    .screen div { max-width: 360px; display: grid; gap: 12px; }
+    .screen h1 { margin: 0; font-size: 24px; }
+    .screen p { margin: 0; color: #a7a39a; }
+    .go { width: 96px; height: 96px; border-radius: 50%; border: 4px solid #777; background: #fff; margin: 8px auto 0; }
   </style>
 </head>
 <body>
-  <section id="start" class="screen">
-    <h1>Lampmodus</h1>
-    <p id="link-intro" hidden><strong>Gekoppeld via de QR-code.</strong> Je bedient alles vanaf je computer; de foto's gaan daar rechtstreeks naartoe over je wifi.</p>
-    <p>De telefoon hangt boven het boek en werkt alleen als camera. Na elke omgeslagen pagina neemt hij vanzelf een foto zodra het beeld stil is.</p>
-    <ol>
-      <li>Leg de telefoon liggend op de lamp, lens vrij over de rand.</li>
-      <li>Zorg dat de dubbele pagina bijna de hele breedte vult.</li>
-      <li>Blader om en houd daarna even stil. Een piep betekent: opgenomen.</li>
-    </ol>
-    <p>Zet Automatisch slot op Nooit (Instellingen › Scherm en helderheid). De app houdt het scherm ook zelf wakker.</p>
-    <button id="go" class="primary">Camera starten</button>
-    <button id="open-shots">Opnames bekijken (<span id="count0">0</span>)</button>
-    <p><a href="./">Terug naar de Boekscanner</a></p>
-    <p id="start-err" class="muted" hidden></p>
-  </section>
+  <video id="video" playsinline muted autoplay></video>
+  <div id="flash"></div>
+  <div id="dim"></div>
+  <div id="status" class="status wait"><span id="status-text">start</span></div>
 
-  <section id="cam" class="screen" hidden>
-    <video id="video" playsinline muted autoplay></video>
-    <div id="flash"></div>
-    <div class="bar top">
-      <span id="res" class="pill">…</span>
-      <span id="state" class="pill">…</span>
-      <span id="wake" class="pill">scherm</span>
-      <span id="link" class="pill" hidden></span>
-      <span class="spacer"></span>
-      <span id="count" class="pill">0 opnames</span>
-    </div>
-    <div class="bar bottom">
-      <button id="auto" class="on" aria-pressed="true">Auto aan</button>
-      <button id="shoot" aria-label="Nu opnemen"></button>
-      <button id="to-shots">Opnames</button>
-    </div>
-    <div id="stopped" hidden>
-      <div>
-        <p>De camera is gestopt, bijvoorbeeld omdat het scherm op slot ging.</p>
-        <button id="restart" class="primary">Opnieuw starten</button>
-      </div>
+  <section id="tap" class="screen" role="button" aria-label="Camera starten">
+    <div>
+      <h1>Camera voor je computer</h1>
+      <p id="tap-text">Tik om te beginnen en leg de telefoon daarna liggend op de lamp. Verder bedien je alles op je computer.</p>
+      <span class="go" aria-hidden="true"></span>
     </div>
   </section>
 
-  <section id="shots" class="screen" hidden>
-    <header>
-      <h2>Opnames</h2>
-      <button id="back-cam">Camera</button>
-    </header>
-    <p class="muted">Elke opname is een volledige foto van de dubbele pagina. Deel ze met AirDrop naar je computer, of bewaar ze in Bestanden.</p>
-    <div class="row">
-      <button id="share" class="primary">Alles delen</button>
-      <button id="clear">Alles wissen</button>
+  <section id="nocode" class="screen" hidden>
+    <div>
+      <h1>Koppel met je computer</h1>
+      <p>Open de Boekscanner op je computer, kies een boek en klik op <strong>Scannen met de lamp</strong>. Scan de QR-code met de Camera-app van deze iPhone.</p>
     </div>
-    <div id="grid"></div>
   </section>
 
   <script src="vendor/peerjs/peerjs.min.js"></script>
