@@ -118,6 +118,17 @@ button:disabled { opacity: .4; cursor: default; }
 .dock-2 > * { margin: 0; }
 @media (min-width: 640px) { .dock-2 { max-width: 640px; margin: 0 auto; } }
 
+/* Op de Mac staan de actieknoppen bovenin, onder de titel (zie placeDock in app.js). */
+.dock.dock-inline {
+  position: static; padding: 0; margin: 10px 0 22px; background: none;
+  display: flex; flex-wrap: wrap; gap: 10px; max-width: none;
+}
+.dock.dock-inline > * { max-width: none; margin: 0; }
+.dock.dock-inline .btn-block { width: auto; min-width: 220px; }
+.dock.dock-inline.dock-2 > * { flex: 0 1 auto; }
+body.typing .dock.dock-inline { opacity: 1; pointer-events: auto; transform: none; }
+@media (min-width: 760px) and (pointer: fine) { .view { padding-bottom: calc(var(--safe-b) + 48px); } }
+
 body.typing .dock { opacity: 0; pointer-events: none; transform: translateY(20px); transition: opacity .15s, transform .15s; }
 
 /* ---------- Boekenlijst ---------- */
