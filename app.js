@@ -1072,11 +1072,13 @@ async function viewDesk(id) {
           </div>
           <figure class="live" id="live-wrap" hidden>
             <canvas id="live" role="img" aria-label="Live beeld van de iPhone"></canvas>
+            <div class="live-badge" id="live-badge" role="status" hidden></div>
           </figure>
           <div class="desk-bar">
             <span class="pill" id="link-state">niet gekoppeld</span>
             <span class="pill" id="cam-state" hidden></span>
             <span class="pill pill-warn" id="res-warn" hidden>camera levert geen 4K</span>
+            <span class="pill" id="shot-count" hidden></span>
             <span class="spacer"></span>
             <button class="btn btn-quiet" data-act="zoom" id="zoom" title="Inzoomen op het boek (alleen in dit beeld; de opname blijft het hele beeld)">Inzoomen <kbd>Z</kbd></button>
             <button class="btn btn-quiet" data-act="turn" id="turn" title="Live beeld een kwartslag draaien">${icon('rotate')} Draaien <kbd>R</kbd></button>
@@ -1182,7 +1184,14 @@ async function viewDesk(id) {
       $('#pair-err').textContent = 'Verbinding weg. De iPhone probeert het vanzelf opnieuw; scan anders de code nog eens.';
     },
     error(text) { $('#pair-err').textContent = text; },
-    shot() { flash(); drawInbox(); },
+    async shot() {
+      flash();
+      await drawInbox();
+      // Op het beeld zelf laten zien dat deze pagina's binnen zijn, tot er wordt omgeslagen.
+      const newest = lastInfo.items[lastInfo.items.length - 1];
+      const at = newest && lastInfo.at.get(newest.id);
+      showBadge(`✓ Opgenomen${at ? ' · ' + pagesLabel(at) : ''} · blader door`, 'ok');
+    },
     message(m) {
       if (m.t === 'hello') { setAuto(!!m.auto); setLinked(true); return; }
       if (m.t === 'preview') {
@@ -1202,6 +1211,9 @@ async function viewDesk(id) {
         $('#live-wrap').hidden = false;
         camState.hidden = !m.state;
         camState.textContent = m.state || '';
+        // Omslaan: het vinkje van de vorige opname mag weg. Stil zonder omslaan: zeggen dat deze al binnen is.
+        if (m.state === 'beweging' && badgeKind !== 'wait' && Date.now() - badgeAt > 1200) hideBadge();
+        if (m.state === 'stil · zelfde pagina' && !badgeKind) showBadge('Deze pagina is al opgenomen · blader door', 'same');
         if (typeof m.auto === 'boolean') setAuto(m.auto);
         if (m.w) $('#res-warn').hidden = Math.max(m.w, m.h) >= 3840;
       }
@@ -1225,6 +1237,27 @@ async function viewDesk(id) {
     return 'wacht op herkenning';
   };
 
+  /* Melding op het live beeld: opnemen, opgenomen (met paginanummers) of al opgenomen. */
+  let badgeKind = null, badgeAt = 0, badgeTimer = null;
+  function showBadge(text, kind) {
+    const b = $('#live-badge');
+    if (!b) return;
+    b.textContent = text;
+    b.className = 'live-badge live-badge-' + kind;
+    b.hidden = false;
+    badgeKind = kind; badgeAt = Date.now();
+    clearTimeout(badgeTimer);
+    // Opnemen zonder antwoord van de iPhone: na een tijdje weer weg.
+    if (kind === 'wait') badgeTimer = setTimeout(() => { if (badgeKind === 'wait') hideBadge(); }, 8000);
+  }
+  function hideBadge() {
+    const b = $('#live-badge');
+    if (b) b.hidden = true;
+    badgeKind = null;
+    clearTimeout(badgeTimer);
+  }
+
+  let lastInfo = { items: [], at: new Map() };
   let drawing = null, again = false;
   /** Tekent de lijst opnieuw; tegelijk binnenkomende verzoeken worden samengevoegd. */
   async function drawInbox() {
@@ -1236,7 +1269,13 @@ async function viewDesk(id) {
         const [items, b, draft] = await Promise.all([inboxOf(id), db.get('books', id), db.get('drafts', id)]);
         if (!alive || !b) return;
         const at = pagesFor(b, items, draft);
+        lastInfo = { items, at };
         $('#next-p').textContent = b.nextPage;
+        // Teller naast het live beeld: hoeveel opnames er klaarliggen en wat de laatste was.
+        const newest = items[items.length - 1];
+        const cnt = $('#shot-count');
+        cnt.hidden = !items.length;
+        cnt.textContent = items.length ? `${items.length} ${items.length === 1 ? 'opname' : 'opnames'} · laatste ${pagesLabel(at.get(newest.id))}` : '';
         $('#inbox-n').textContent = items.length ? `(${items.length})` : '';
         $('#review').disabled = !items.length && !draft;
         $('#review').textContent = draft ? 'Verder met nakijken' : 'Nakijken en opslaan';
@@ -1244,6 +1283,7 @@ async function viewDesk(id) {
         const ids = new Set(items.map(s => s.id));
         for (const [k, u] of thumbs) if (!ids.has(k)) { URL.revokeObjectURL(u); thumbs.delete(k); }
         for (const s of items) if (!thumbs.has(s.id) && s.thumb) thumbs.set(s.id, URL.createObjectURL(s.thumb));
+        // Nieuwste opname bovenaan, zodat hij niet onder in de lijst verdwijnt.
         const rows = items.map((s, i) => `<li class="inbox-row${s.status === 'error' ? ' inbox-err' : ''}">
             <button class="inbox-open" data-act="open-shot" data-id="${s.id}" aria-label="Opname ${i + 1} nakijken">
               ${thumbs.has(s.id) ? `<img src="${thumbs.get(s.id)}" alt="">` : '<span class="inbox-ph"></span>'}
@@ -1251,7 +1291,7 @@ async function viewDesk(id) {
                 <span class="muted small">${stateLabel(s)}</span></span>
             </button>
             <button class="icon-btn" data-act="del-shot" data-id="${s.id}" aria-label="Opname ${i + 1} weggooien">${icon('trash')}</button>
-          </li>`);
+          </li>`).reverse();
         if (draft) {
           rows.unshift(`<li class="inbox-row inbox-cur">
             <button class="inbox-open" data-act="review" aria-label="Verder met nakijken">
@@ -1279,7 +1319,11 @@ async function viewDesk(id) {
     drawInbox();
   });
 
-  const capture = () => { if (link.connected) link.send({ t: 'capture' }); };
+  const capture = () => {
+    if (!link.connected) return;
+    link.send({ t: 'capture' });
+    showBadge('Opnemen…', 'wait');
+  };
   const toggleAuto = () => {
     if (!link.connected) return;
     const on = !$('#auto').dataset.on;
