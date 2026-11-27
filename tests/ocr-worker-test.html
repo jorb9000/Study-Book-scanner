@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="nl"><head><meta charset="utf-8"><title>OCR-worker-test</title></head>
+<body>
+<p>Herkenning via de worker (ocr-client.js), zoals de app hem gebruikt.</p>
+<script type="module">
+  import { ocrQueue } from '../ocr-client.js';
+  window.runWorker = async (url, lang = 'nld', maxSide = 4096) => {
+    ocrQueue.setMaxSide(maxSide);
+    const blob = await (await fetch(url)).blob();
+    const t = performance.now();
+    const res = await ocrQueue.recognize(blob, lang);
+    return { ...res, image: !!res.image, ms: Math.round(performance.now() - t) };
+  };
+  window.ready = true;
+</script>
+</body></html>

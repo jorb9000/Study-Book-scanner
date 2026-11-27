@@ -4,7 +4,7 @@ import {
   grayFromCanvas, canvasFromGray, findPage, warpPage, normalizeLight, estimateSkew, rotate,
   dewarp, removeRules, clearBorders, cropSides, findDropCaps, cropForOcr, whiteOut,
   findGutter, cropX, turn, measureWords,
-  bookCrop,
+  bookCrop, newCanvas,
 } from './scan.js';
 
 /* ---------- Tekst opbouwen ---------- */
@@ -356,7 +356,12 @@ export function tidy(t) {
 
 /* ---------- Afbeeldingen ---------- */
 
+/** Laadt een foto. In een worker (geen document) als ImageBitmap, met naturalWidth/-Height erbij. */
 export function loadImage(blob) {
+  if (typeof document === 'undefined') {
+    return createImageBitmap(blob).then((b) => Object.assign(b, { naturalWidth: b.width, naturalHeight: b.height }),
+      () => { throw new Error('Afbeelding kon niet worden geladen'); });
+  }
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
     const img = new Image();
@@ -372,13 +377,13 @@ export async function resizeToBlob(blob, maxSide, quality = 0.85, rotate = 0) {
   const scale = Math.min(1, maxSide / Math.max(w0, h0));
   const w = Math.round(w0 * scale), h = Math.round(h0 * scale);
   const swap = rotate % 180 !== 0;
-  const c = document.createElement('canvas');
-  c.width = swap ? h : w;
-  c.height = swap ? w : h;
+  const c = newCanvas(swap ? h : w, swap ? w : h);
   const g = c.getContext('2d');
   g.translate(c.width / 2, c.height / 2);
   g.rotate((rotate * Math.PI) / 180);
   g.drawImage(img, -w / 2, -h / 2, w, h);
+  img.close?.();
+  if (c.convertToBlob) return c.convertToBlob({ type: 'image/jpeg', quality });
   return new Promise(r => c.toBlob(r, 'image/jpeg', quality));
 }
 
@@ -389,9 +394,9 @@ export const ocrConfig = { maxSide: 2200 };
 async function grayOf(blob) {
   const im = await loadImage(blob);
   const scale = Math.min(1, ocrConfig.maxSide / Math.max(im.naturalWidth, im.naturalHeight));
-  const c = document.createElement('canvas');
-  c.width = Math.round(im.naturalWidth * scale); c.height = Math.round(im.naturalHeight * scale);
+  const c = newCanvas(Math.round(im.naturalWidth * scale), Math.round(im.naturalHeight * scale));
   c.getContext('2d', { willReadFrequently: true }).drawImage(im, 0, 0, c.width, c.height);
+  im.close?.();
   return grayFromCanvas(c);
 }
 

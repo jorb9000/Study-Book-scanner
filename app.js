@@ -1,12 +1,12 @@
 /* Boekscanner — scan een boek in delen, met voortgang per boek.
    Alles blijft lokaal op het toestel (IndexedDB). Geen build-stap nodig. */
 
-import { ocr, ocrConfig, resizeToBlob } from './ocr.js';
+import { ocrQueue } from './ocr-client.js';
 import { shots, host, toBlob } from './koppel.js';
 import { grayFromCanvas, findBookBox } from './scan.js';
 
 // Op de computer foto's minder verkleinen: 4K-opnames van de lamp blijven dan scherp genoeg.
-if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) ocrConfig.maxSide = 4096;
+if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) ocrQueue.setMaxSide(4096);
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const app = $('#app');
@@ -197,6 +197,8 @@ function go(hash, replace = false) {
   if (replace) history.replaceState(null, '', hash);
   else if (location.hash !== hash) { location.hash = hash; return; }
   route();
+// Opnames die nog niet herkend waren (bijvoorbeeld na herladen) alvast oppakken.
+if (!PHONE) bg.kick();
 }
 
 let cleanup = null;
@@ -367,6 +369,7 @@ async function viewBookForm(id) {
     if (!await confirmSheet('Boek verwijderen?', `“${book.title}” en alle gescande pagina's worden van dit toestel verwijderd.`, 'Verwijderen', true)) return;
     const pages = await db.pagesOf(book.id);
     for (const p of pages) await db.del('pages', p.id);
+    for (const s of await inboxOf(book.id)) await shots.del(s.id);
     await db.del('drafts', book.id);
     await db.del('books', book.id);
     toast('Boek verwijderd');
@@ -516,6 +519,8 @@ async function viewBook(id) {
       book.updatedAt = Date.now();
       await db.put('books', book);
       route();
+// Opnames die nog niet herkend waren (bijvoorbeeld na herladen) alvast oppakken.
+if (!PHONE) bg.kick();
     }
   }
 }
@@ -528,14 +533,18 @@ async function viewReview(id) {
   if (!draft) return go(`#/boek/${id}`, true);
 
   const scanned = new Set((await db.pagesOf(id)).map(p => p.pageNumber));
-  const imgUrl = URL.createObjectURL(draft.image);
+  const urls = [];
+  const urlOf = (blob) => { const u = URL.createObjectURL(blob); urls.push(u); return u; };
   let alive = true;
-  cleanup = () => { alive = false; URL.revokeObjectURL(imgUrl); };
+  let off = () => {};
+  cleanup = () => { alive = false; off(); urls.forEach(u => URL.revokeObjectURL(u)); };
+  // Opname van de lamp: terug naar de lijst met opnames, daar kies je ook een andere opname.
+  const back = draft.fromLamp ? { href: `#/boek/${id}/lamp`, label: 'Opnames' } : { href: `#/boek/${id}`, label: book.title };
 
   render(`
     <section class="view view-review">
       <header class="top">
-        <a class="back" href="#/boek/${id}">${icon('back')} ${esc(book.title)}</a>
+        <a class="back" href="${back.href}">${icon('back')} ${esc(back.label)}</a>
         <button class="icon-btn" data-act="discard" aria-label="Scan weggooien">${icon('trash')}</button>
       </header>
 
@@ -549,7 +558,7 @@ async function viewReview(id) {
       </div>
 
       <figure class="photo" id="photo">
-        <img src="${imgUrl}" alt="Foto van pagina ${draft.pageNumber}">
+        <img src="${urlOf(draft.image)}" alt="Foto van pagina ${draft.pageNumber}">
         <div class="photo-tools">
           <button class="chip" data-act="rotate">${icon('rotate')} Draaien</button>
           <button class="chip" data-act="retake">${icon('camera')} Opnieuw</button>
@@ -583,15 +592,18 @@ async function viewReview(id) {
   const ta = $('#text');
   const ta2 = $('#text2');
   const status = $('#status');
+  const bar = $('#ocr-bar'), label = $('#ocr-label');
+  const setPhoto = (blob) => { $('#photo img').src = urlOf(blob); };
   // Open boek op de foto: de tekst staat in twee vakken en wordt als twee pagina's opgeslagen.
   const isSpread = () => draft.text2 != null;
   const pageLabels = () => {
     $('#pl1').textContent = `Pagina ${draft.pageNumber}`;
     $('#pl2').textContent = `Pagina ${draft.pageNumber + 1}`;
   };
-  const setButtons = (on) => app.querySelectorAll('[data-act="save"], [data-act="save-next"]').forEach(b => (b.disabled = !on));
+  const setButtons = (on) => app.querySelectorAll('[data-act="save"], [data-act="save-next"], [data-act="rotate"], [data-act="unsplit"]').forEach(b => (b.disabled = !on));
 
   const showText = (t) => {
+    status.hidden = true;
     $('#text-wrap').hidden = false;
     ta.value = t;
     const two = isSpread();
@@ -604,103 +616,88 @@ async function viewReview(id) {
   };
   const grow = (el) => { el.style.height = 'auto'; el.style.height = Math.max(220, el.scrollHeight + 2) + 'px'; };
   const autosize = () => { grow(ta); if (isSpread()) grow(ta2); };
-  ta.addEventListener('input', () => {
-    grow(ta);
-    clearTimeout(ta._t);
-    ta._t = setTimeout(() => { draft.text = ta.value; db.put('drafts', draft); }, 400);
-  });
-  ta2.addEventListener('input', () => {
-    grow(ta2);
-    clearTimeout(ta2._t);
-    ta2._t = setTimeout(() => { draft.text2 = ta2.value; db.put('drafts', draft); }, 400);
-  });
-  const useResult = (r) => {
-    if (r.image) { draft.image = r.image; $('#photo img').src = URL.createObjectURL(r.image); }
-    if (r.pages && r.pages.length === 2) { draft.text = r.pages[0].text; draft.text2 = r.pages[1].text; }
-    else { draft.text = r.text; draft.text2 = null; }
-    draft.confidence = r.confidence;
+  // Tekst bewaren: alleen het veld zelf bijwerken in de opgeslagen versie (niet het hele concept),
+  // zodat een herkenning die intussen klaar is niet wordt overschreven.
+  const keep = (field, el) => {
+    clearTimeout(el._t);
+    el._t = setTimeout(async () => {
+      el._t = null;
+      draft[field] = el.value;
+      const d = await db.get('drafts', id);
+      if (d && d.createdAt === draft.createdAt) { d[field] = el.value; await db.put('drafts', d); }
+    }, 400);
   };
+  ta.addEventListener('input', () => { grow(ta); keep('text', ta); });
+  ta2.addEventListener('input', () => { grow(ta2); keep('text2', ta2); });
 
-  async function runOcr(auto = true) {
-    setButtons(false);
-    $('#text-wrap').hidden = true;
-    status.hidden = false;
-    $('#conf').textContent = '';
-    const bar = $('#ocr-bar'), label = $('#ocr-label');
-    try {
-      await deskJob; // de herkenning op de achtergrond (lamp) eerst laten afronden
-      const res = await ocr.recognize(draft.image, book.lang, (m) => {
-        if (!alive) return;
-        if (m.status === 'recognizing text') {
-          bar.style.width = Math.round(m.progress * 100) + '%';
-          label.textContent = `Tekst herkennen… ${Math.round(m.progress * 100)}%`;
-        } else if (/loading|initializ/i.test(m.status)) {
-          label.textContent = 'Tekstherkenning voorbereiden…';
-        }
-      });
-      if (!alive) return;
-      if (res.image) { draft.image = res.image; $('#photo img').src = URL.createObjectURL(res.image); }
-      let best = res;
-      // Zeer lage zekerheid? Waarschijnlijk ligt de foto gedraaid: probeer zelf de andere richtingen.
-      if (res.confidence < 45 && auto) {
-        for (const deg of [90, 270, 180]) {
-          label.textContent = 'Foto ligt gedraaid? Andere richting proberen…';
-          bar.style.width = '0%';
-          const img = await resizeToBlob(draft.image, 2200, 0.9, deg);
-          const r = await ocr.recognize(img, book.lang, (m) => {
-            if (alive && m.status === 'recognizing text') bar.style.width = Math.round(m.progress * 100) + '%';
-          });
-          if (!alive) return;
-          if (r.confidence > best.confidence + 10) {
-            best = r;
-            draft.image = r.image || img;
-            $('#photo img').src = URL.createObjectURL(draft.image);
-          }
-          if (best.confidence >= 75) break;
-        }
-      }
-      useResult({ ...best, image: null });
-      await db.put('drafts', draft);
-      status.hidden = true;
-      showText(draft.text);
-      showConf();
-      if (!draft.text) $('#conf').textContent = 'Geen tekst gevonden. Probeer draaien of maak een nieuwe foto met meer licht.';
-    } catch (err) {
-      console.error(err);
-      if (!alive) return;
-      label.textContent = 'Herkennen mislukt. Probeer het opnieuw.';
-      showText(draft.text || '');
-    }
-  }
   const showConf = () => {
     if (draft.confidence == null) return;
     const c = draft.confidence;
-    $('#conf').textContent = c >= 85 ? `Herkenning ${c}% zeker`
+    $('#conf').textContent = !draft.text && !draft.text2 ? 'Geen tekst gevonden. Probeer draaien of neem de pagina opnieuw op met meer licht.'
+      : c >= 85 ? `Herkenning ${c}% zeker`
       : c >= 60 ? `Herkenning ${c}% zeker. Controleer de tekst goed.`
-      : `Herkenning ${c}% zeker. Probeer een nieuwe foto: recht van boven, met meer licht.`;
+      : `Herkenning ${c}% zeker. Probeer een nieuwe opname: recht van boven, met meer licht.`;
+  };
+  const showBusy = (text, pct = null) => {
+    setButtons(false);
+    $('#text-wrap').hidden = true; $('#text-wrap2').hidden = true; $('#unsplit').hidden = true;
+    $('#conf').textContent = '';
+    status.hidden = false;
+    bar.style.width = (pct ?? 0) + '%';
+    label.textContent = text;
+  };
+  const progressText = (pct) => `Tekst herkennen… ${pct}%`;
+
+  /** Het concept is klaar (of mislukt): opnieuw inlezen en tonen. */
+  const reload = async () => {
+    const d = await db.get('drafts', id);
+    if (!alive || !d || d.createdAt !== draft.createdAt) return;
+    Object.assign(draft, d);
+    setPhoto(draft.image);
+    if (draft.text == null) { label.textContent = 'Herkennen mislukt.'; showText(''); $('#conf').textContent = 'Herkennen mislukt. Probeer Draaien, of neem de pagina opnieuw op.'; return; }
+    showText(draft.text);
+    showConf();
   };
 
-  if (draft.text == null) runOcr();
-  else { showText(draft.text); showConf(); }
+  /** Op de herkenning wachten die al loopt (op de achtergrond of eerder vanuit dit scherm). */
+  function follow() {
+    const job = jobFor(id, draft);
+    if (!job) return false;
+    showBusy(job.pct ? progressText(job.pct) : 'Wacht op de herkenning…', job.pct);
+    off();
+    off = bus.on((ev) => {
+      if (!alive || ev.key !== job.key) return;
+      if (ev.type === 'progress') { bar.style.width = ev.pct + '%'; label.textContent = progressText(ev.pct); }
+      if (ev.type === 'done') { off(); reload(); }
+    });
+    return true;
+  }
+
+  function startOcr() {
+    recognizeDraft(id, book.lang, draft);
+    follow();
+  }
+
+  if (draft.text != null) { showText(draft.text); showConf(); }
+  else if (!follow()) startOcr();
 
   const setPn = async (n) => {
     draft.pageNumber = Math.max(1, n);
     $('#pn').textContent = `p. ${draft.pageNumber}`;
     $('#chap').textContent = chapterFor(book, draft.pageNumber)?.title || '';
     if (isSpread()) pageLabels();
-    await db.put('drafts', draft);
+    const d = await db.get('drafts', id);
+    if (d && d.createdAt === draft.createdAt) { d.pageNumber = draft.pageNumber; await db.put('drafts', d); }
   };
 
   async function save() {
     draft.text = ta.value;
     const texts = [draft.text];
     if (isSpread()) { draft.text2 = ta2.value; texts.push(draft.text2); }
-    const thumb = await resizeToBlob(draft.image, 1100, 0.72);
-    let existing = null;
+    const thumb = await ocrQueue.resize(draft.image, 1100, 0.72);
     for (let i = 0; i < texts.length; i++) {
       const n = draft.pageNumber + i, id_ = pageId(id, n);
       const old = await db.get('pages', id_);
-      existing = existing || old;
       await db.put('pages', {
         id: id_, bookId: id, pageNumber: n,
         text: texts[i].trim(), confidence: draft.confidence ?? null,
@@ -713,12 +710,12 @@ async function viewReview(id) {
     book.nextPage = nextUnscanned(draft.pageNumber + texts.length, set, book);
     book.updatedAt = Date.now();
     await db.put('books', book);
-    return existing;
   }
 
+  let saving = false;
   const onClick = async (e) => {
     const el = e.target.closest('[data-act]');
-    if (!el) return;
+    if (!el || el.disabled) return;
     const act = el.dataset.act;
     if (act === 'pn-inc') return setPn(draft.pageNumber + 1);
     if (act === 'pn-dec') return setPn(draft.pageNumber - 1);
@@ -729,11 +726,17 @@ async function viewReview(id) {
       return showText(draft.text);
     }
     if (act === 'rotate') {
-      draft.image = await resizeToBlob(draft.image, 2200, 0.9, 90);
-      draft.text = null; draft.text2 = null;
-      await db.put('drafts', draft);
-      $('#photo img').src = URL.createObjectURL(draft.image);
-      return runOcr(false);
+      showBusy('Foto draaien…');
+      clearTimeout(ta._t); clearTimeout(ta2._t);
+      const d = await db.get('drafts', id);
+      if (!d || d.createdAt !== draft.createdAt) return;
+      d.image = await ocrQueue.resize(d.image, ocrQueue.maxSide, 0.92, 90);
+      d.text = null; d.text2 = null; d.confidence = null;
+      await db.put('drafts', d);
+      Object.assign(draft, d);
+      if (!alive) return;
+      setPhoto(draft.image);
+      return startOcr();
     }
     if (act === 'retake') {
       book.nextPage = draft.pageNumber;
@@ -744,33 +747,187 @@ async function viewReview(id) {
     if (act === 'discard') {
       if (!await confirmSheet('Scan weggooien?', 'De foto en de herkende tekst worden niet bewaard.', 'Weggooien', true)) return;
       await db.del('drafts', id);
-      return go(`#/boek/${id}`);
+      return go(back.href);
     }
-    if (act === 'save' || act === 'save-next') {
-      let next = act === 'save-next';
+    if ((act === 'save' || act === 'save-next') && !saving) {
+      const next = act === 'save-next';
       const taken = [draft.pageNumber, ...(isSpread() ? [draft.pageNumber + 1] : [])].filter(n => scanned.has(n));
       if (taken.length) {
         const title = taken.length > 1 ? `Pagina ${taken[0]} en ${taken[1]} bestaan al` : `Pagina ${taken[0]} bestaat al`;
         if (!await confirmSheet(title, 'De eerder opgeslagen tekst wordt vervangen.', 'Vervangen')) return;
       }
+      saving = true;
       setButtons(false);
-      // Na opslaan meteen de volgende opname van de lamp nakijken, anders terug naar het bureau.
-      await save();
+      clearTimeout(ta._t); clearTimeout(ta2._t);
+      try { await save(); } catch (err) { console.error(err); saving = false; setButtons(true); return toast('Opslaan mislukt'); }
       toast(isSpread() ? `Pagina ${draft.pageNumber} en ${draft.pageNumber + 1} opgeslagen` : `Pagina ${draft.pageNumber} opgeslagen`);
+      // Na opslaan meteen de volgende opname van de lamp nakijken, anders terug naar het bureau.
       if (next && await takeFromInbox(id)) return go(`#/boek/${id}/scan`, true);
       return go(`#/boek/${id}/lamp`, true);
     }
   };
   app.addEventListener('click', onClick);
   const prevCleanup = cleanup;
-  cleanup = () => { prevCleanup(); app.removeEventListener('click', onClick); };
+  cleanup = () => {
+    prevCleanup(); app.removeEventListener('click', onClick);
+    // Nog niet bewaarde tekst toch bewaren.
+    if (ta._t) { clearTimeout(ta._t); keepNow('text', ta.value); }
+    if (ta2._t) { clearTimeout(ta2._t); keepNow('text2', ta2.value); }
+  };
+  const keepNow = async (field, value) => {
+    const d = await db.get('drafts', id);
+    if (d && d.createdAt === draft.createdAt) { d[field] = value; await db.put('drafts', d); }
+  };
 }
 
-/* ---------- Bureau: iPhone op de lamp, bediening op de computer ---------- */
+/* ---------- Herkenning op de achtergrond ---------- */
 
-let deskJob = Promise.resolve();   // herkenning die op de achtergrond loopt
+/** Berichten over lopende herkenningen: { key, type: 'start' | 'progress' | 'done', pct }. */
+const bus = {
+  fns: new Set(),
+  on(f) { this.fns.add(f); return () => this.fns.delete(f); },
+  emit(ev) { for (const f of [...this.fns]) { try { f(ev); } catch (err) { console.error(err); } } },
+};
+/** Herkenningen die nu lopen of in de wachtrij staan, op sleutel ('shot:<id>' of 'draft:<boek>:<n>'). */
+const activeJobs = new Map();
+const progressOf_ = (key) => (m) => {
+  if (m.status !== 'recognizing text') return;
+  const job = activeJobs.get(key);
+  const pct = Math.round(m.progress * 100);
+  if (!job || job.pct === pct) return;
+  job.pct = pct;
+  bus.emit({ key, type: 'progress', pct });
+};
+
+/** De herkenning die bij een concept hoort, als die nog loopt. */
+const jobFor = (bookId, draft) => (draft.job && activeJobs.get(draft.job)) || null;
+
+/** Velden van een herkenningsresultaat, zoals ze in een opname of concept staan. */
+const resultFields = (res) => ({
+  confidence: res.confidence,
+  text: res.pages && res.pages.length === 2 ? res.pages[0].text : res.text,
+  text2: res.pages && res.pages.length === 2 ? res.pages[1].text : null,
+  turned: res.image || null,
+  deg: res.rotated || 0,
+});
+
+/** Herkent het concept van een boek opnieuw (met voorrang: je zit erop te wachten). */
+function recognizeDraft(bookId, lang, draft) {
+  const key = `draft:${bookId}:${uid()}`;
+  draft.job = key;
+  activeJobs.set(key, { key, pct: 0 });
+  (async () => {
+    let res = null;
+    try {
+      const d = await db.get('drafts', bookId);
+      if (d && d.createdAt === draft.createdAt) {
+        d.job = key; d.text = null; d.text2 = null;
+        await db.put('drafts', d);
+        res = await ocrQueue.recognize(d.image, lang, { priority: 1, onProgress: progressOf_(key) });
+      }
+    } catch (err) { console.error(err); }
+    const cur = await db.get('drafts', bookId);
+    if (cur && cur.job === key) {
+      if (res) { const f = resultFields(res); Object.assign(cur, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || cur.image }); }
+      cur.job = null;
+      await db.put('drafts', cur);
+    }
+    activeJobs.delete(key);
+    bus.emit({ key, type: 'done' });
+  })();
+}
+
+/** Past een opname aan binnen één transactie (geen botsing met ander werk aan dezelfde opname). */
+function patchShot(id, fn) {
+  return shots.run('readwrite', (s) => {
+    const r = s.get(id);
+    r.onsuccess = () => { if (r.result) { fn(r.result); s.put(r.result); } };
+    return r;
+  });
+}
+
+/** Kleine voorbeeldfoto voor de lijst, zodat die niet steeds 4K-foto's hoeft te tekenen. */
+async function addThumb(id) {
+  const s = await shots.get(id);
+  if (!s || s.thumb) return;
+  try {
+    const thumb = await ocrQueue.resize(s.image, 360, 0.75);
+    await patchShot(id, (x) => { x.thumb = thumb; });
+    bus.emit({ key: `shot:${id}`, type: 'thumb' });
+  } catch (err) { console.error(err); }
+}
+
+/** Hoe het live beeld gedraaid wordt: vanzelf uit de herkende opnames, of met de hand (onthouden). */
+const lampTurn = {
+  state: (() => { try { return JSON.parse(localStorage.getItem('boekscanner-lampdraai')) || { deg: 0, manual: false }; } catch { return { deg: 0, manual: false }; } })(),
+  set(deg, manual) {
+    this.state = { deg: ((deg % 360) + 360) % 360, manual: manual || this.state.manual };
+    localStorage.setItem('boekscanner-lampdraai', JSON.stringify(this.state));
+    bus.emit({ key: 'turn', type: 'turn' });
+  },
+  auto(deg) { if (!this.state.manual && deg !== this.state.deg) this.set(deg, false); },
+};
+
+/**
+ * Herkent alle opnames van de lamp één voor één, los van welk scherm open is.
+ * Zo staat de tekst al klaar als je gaat nakijken, en blijft de app klikbaar.
+ */
+const bg = {
+  running: false,
+  current: null,
+  async kick() {
+    if (PHONE || this.running) return;
+    this.running = true;
+    try {
+      for (;;) {
+        const s = (await shots.all()).filter(x => x.bookId && (x.status === 'new' || x.status === 'busy')).sort((a, b) => a.id - b.id)[0];
+        if (!s) break;
+        await this.process(s);
+      }
+    } catch (err) { console.error(err); }
+    finally { this.running = false; this.current = null; }
+  },
+  async process(s) {
+    const key = `shot:${s.id}`;
+    const book = await db.get('books', s.bookId);
+    if (!book) { await shots.del(s.id); return; }
+    await patchShot(s.id, (x) => { x.status = 'busy'; });
+    this.current = s.id;
+    activeJobs.set(key, { key, pct: 0 });
+    bus.emit({ key, type: 'start' });
+    let res = null;
+    try { res = await ocrQueue.recognize(s.image, book.lang, { onProgress: progressOf_(key) }); }
+    catch (err) { console.error(err); }
+    const done = () => { activeJobs.delete(key); this.current = null; bus.emit({ key, type: 'done' }); };
+    const f = res && resultFields(res);
+    if (!await shots.get(s.id)) {
+      // Intussen geopend in het nakijkscherm: het resultaat hoort nu bij het concept.
+      const d = await db.get('drafts', s.bookId);
+      if (d && d.job === key) {
+        if (f) Object.assign(d, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || d.image });
+        d.job = null;
+        await db.put('drafts', d);
+      }
+      return done();
+    }
+    if (!f) { await patchShot(s.id, (x) => { x.status = 'error'; }); return done(); }
+    // Dezelfde pagina's als de vorige opname (niet omgeslagen)? Dan niet nog eens nakijken.
+    if (overlap([f.text, f.text2].filter(Boolean).join('\n'), await previousText(s.bookId, s.id)) >= 0.7) {
+      await shots.del(s.id);
+      toast('Dubbele opname weggelaten: dezelfde pagina\'s als de vorige');
+      return done();
+    }
+    await patchShot(s.id, (x) => Object.assign(x, { status: 'done', confidence: f.confidence, rotated: f.turned, text: f.text, text2: f.text2 }));
+    if (f.confidence >= 60) lampTurn.auto(f.deg);
+    done();
+  },
+};
 
 /** Opnames van de lamp die bij dit boek horen, op volgorde van opname. */
+async function inboxOf(bookId) {
+  return (await shots.all()).filter(s => s.bookId === bookId).sort((a, b) => a.id - b.id);
+}
+
 /** Woorden (vanaf 4 letters) van een tekst, om opnames met elkaar te vergelijken. */
 const wordSet = (t) => new Set(((t || '').toLowerCase().match(/\p{L}{4,}/gu) || []));
 
@@ -797,26 +954,62 @@ async function previousText(bookId, shotId) {
   return pages.filter(p => pages[0].savedAt - p.savedAt < 2000).map(p => p.text).join('\n');
 }
 
-async function inboxOf(bookId) {
-  return (await shots.all()).filter(s => s.bookId === bookId).sort((a, b) => a.id - b.id);
+/**
+ * Welke pagina('s) elke opname waarschijnlijk is: vanaf de volgende pagina van het boek,
+ * twee per opname van een open boek. Nog niet herkend? Dan zoals de meeste andere opnames.
+ */
+function pagesFor(book, items, draft) {
+  const known = items.filter(s => s.status === 'done').map(s => (s.text2 != null ? 2 : 1));
+  const guess = known.length ? (known.filter(k => k === 2).length * 2 >= known.length ? 2 : 1) : 2;
+  const size = (s) => (s.status === 'done' || s.text != null ? (s.text2 != null ? 2 : 1) : guess);
+  // Het concept dat open staat telt mee op zijn plek in de volgorde, met het paginanummer dat het nu heeft.
+  const list = [...items];
+  if (draft && draft.shotId) list.push({ ...draft, id: draft.shotId, isDraft: true });
+  list.sort((a, b) => a.id - b.id);
+  let p = book.nextPage;
+  const out = new Map();
+  for (const s of list) {
+    if (s.isDraft) { p = draft.pageNumber + size(s); continue; }
+    const k = size(s);
+    out.set(s.id, { from: p, n: k });
+    p += k;
+  }
+  return out;
 }
 
-/** Zet de oudste opname van de lamp klaar als concept, zodat hij in het gewone nakijkscherm opent. */
-async function takeFromInbox(bookId) {
+/** Zet een opname van de lamp klaar als concept (de oudste, of een bepaalde), zodat hij in het nakijkscherm opent. */
+async function takeFromInbox(bookId, shotId = null) {
   const book = await db.get('books', bookId);
-  const [s] = await inboxOf(bookId);
+  const items = await inboxOf(bookId);
+  const s = shotId ? items.find(x => x.id === shotId) : items[0];
   if (!book || !s) return false;
   const done = s.status === 'done';
+  const key = `shot:${s.id}`;
+  const at = pagesFor(book, items, await db.get('drafts', bookId)).get(s.id);
   await db.put('drafts', {
-    bookId, pageNumber: book.nextPage,
-    image: (done && s.rotated) || s.image,
+    bookId, pageNumber: at ? at.from : book.nextPage,
+    image: (done && s.rotated) || s.image, thumb: s.thumb || null,
     text: done ? s.text : null,
     text2: done ? (s.text2 ?? null) : null,
     confidence: done ? s.confidence : null,
+    shotId: s.id, job: !done && activeJobs.has(key) ? key : null,
     rotate: 0, createdAt: Date.now(), fromLamp: true,
   });
   await shots.del(s.id);
   return true;
+}
+
+/** Het concept dat nu open staat terug in de lijst met opnames zetten (om eerst een andere na te kijken). */
+async function returnDraft(bookId) {
+  const d = await db.get('drafts', bookId);
+  if (!d) return;
+  const running = d.job && activeJobs.has(d.job) && d.job === `shot:${d.shotId}`;
+  await shots.put({
+    id: d.shotId || Date.now(), bookId, image: d.image, thumb: d.thumb || null, rotated: null,
+    text: d.text, text2: d.text2 ?? null, confidence: d.confidence ?? null,
+    status: d.text != null ? 'done' : running ? 'busy' : 'new', createdAt: new Date(d.createdAt).toISOString(),
+  });
+  await db.del('drafts', bookId);
 }
 
 /** De verbinding met de iPhone blijft bestaan zolang de app openstaat, ook tijdens het nakijken. */
@@ -832,11 +1025,15 @@ function ensureDesk(bookId) {
       async message(m) {
         if (!m || typeof m !== 'object') return;
         if (m.t === 'shot') {
-          if (!await shots.get(m.id)) {
+          const isNew = !await shots.get(m.id);
+          if (isNew) {
             await shots.put({ id: m.id, bookId: d.bookId, width: m.w, height: m.h, image: toBlob(m.img), createdAt: m.createdAt, status: 'new' });
           }
           d.link.send({ t: 'ack', id: m.id });
+          if (!isNew) return;
           if (d.ui) d.ui.shot(); else toast('Nieuwe opname van de lamp ontvangen');
+          addThumb(m.id);
+          bg.kick();
           return;
         }
         d.ui?.message(m);
@@ -893,7 +1090,7 @@ async function viewDesk(id) {
           <div class="block-head">
             <h2>Opnames <span class="muted" id="inbox-n"></span></h2>
           </div>
-          <p class="muted small">Volgende pagina: p. <span id="next-p">${book.nextPage}</span>. Elke opname van een open boek wordt twee pagina's.</p>
+          <p class="muted small">Volgende pagina: p. <span id="next-p">${book.nextPage}</span>. Elke opname van een open boek wordt twee pagina's. Klik op een opname om hem na te kijken, ook als hij nog herkend wordt.</p>
           <ul class="inbox" id="inbox"></ul>
           <button class="btn btn-primary btn-block" data-act="review" id="review" disabled>Nakijken en opslaan</button>
         </aside>
@@ -903,14 +1100,7 @@ async function viewDesk(id) {
 
   let alive = true;
   let lastFrame = null;
-  const urls = [];
-  // Hoe het live beeld gedraaid wordt. Vanzelf uit de eerste herkende opname, of met de hand (onthouden).
-  let turn = (() => { try { return JSON.parse(localStorage.getItem('boekscanner-lampdraai')) || { deg: 0, manual: false }; } catch { return { deg: 0, manual: false }; } })();
-  const setTurn = (deg, manual) => {
-    turn = { deg: ((deg % 360) + 360) % 360, manual: manual || turn.manual };
-    localStorage.setItem('boekscanner-lampdraai', JSON.stringify(turn));
-    if (lastFrame) drawFrame(lastFrame);
-  };
+  const thumbs = new Map();   // opname-id → object-URL van de voorbeeldfoto
   // Inzoomen op het boek: alleen de weergave, de camera blijft op 1x en de opname is het hele beeld.
   let zoomOn = localStorage.getItem('boekscanner-lampzoom') !== 'uit';
   let box = null;   // gladgestreken uitsnede { x, y, w, h } in pixels van het voorbeeldbeeld
@@ -944,13 +1134,14 @@ async function viewDesk(id) {
     // Niet kleiner tekenen dan het beeld was: bij inzoomen schalen we op tot de oorspronkelijke grootte.
     const scale = Math.max(bmp.width, bmp.height) / Math.max(src.w, src.h);
     const w = Math.round(src.w * scale), h = Math.round(src.h * scale);
-    const side = turn.deg % 180 !== 0;
-    c.width = side ? h : w;
-    c.height = side ? w : h;
+    const deg = lampTurn.state.deg;
+    const side = deg % 180 !== 0;
+    const cw = side ? h : w, ch = side ? w : h;
+    if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
     const g = c.getContext('2d');
     g.save();
     g.translate(c.width / 2, c.height / 2);
-    g.rotate((turn.deg * Math.PI) / 180);
+    g.rotate((deg * Math.PI) / 180);
     g.drawImage(bmp, src.x, src.y, src.w, src.h, -w / 2, -h / 2, w, h);
     g.restore();
   }
@@ -972,6 +1163,7 @@ async function viewDesk(id) {
 
   const d = ensureDesk(id);
   const link = d.link;
+  let frameBusy = false;
   d.ui = {
     ready(code) {
       if (!alive) return;
@@ -990,19 +1182,22 @@ async function viewDesk(id) {
       $('#pair-err').textContent = 'Verbinding weg. De iPhone probeert het vanzelf opnieuw; scan anders de code nog eens.';
     },
     error(text) { $('#pair-err').textContent = text; },
-    async shot() { flash(); await drawInbox(); work(); },
+    shot() { flash(); drawInbox(); },
     message(m) {
-      if (m.t === 'hello') { setAuto(!!m.auto); return; }
+      if (m.t === 'hello') { setAuto(!!m.auto); setLinked(true); return; }
       if (m.t === 'preview') {
-        if (m.img) {
+        // Komt er een beeld binnen terwijl het vorige nog getekend wordt, dan dat nieuwe overslaan.
+        if (m.img && !frameBusy) {
+          frameBusy = true;
           createImageBitmap(toBlob(m.img)).then((bmp) => {
             if (!alive) return bmp.close();
             if (lastFrame) lastFrame.close();
             lastFrame = bmp;
             trackBook(bmp);
             drawFrame(bmp);
-          }).catch(() => {});
+          }).catch(() => {}).finally(() => { frameBusy = false; });
         }
+        if (!link.connected) return;
         $('#pair').hidden = true;
         $('#live-wrap').hidden = false;
         camState.hidden = !m.state;
@@ -1021,104 +1216,133 @@ async function viewDesk(id) {
     w.classList.remove('flash'); void w.offsetWidth; w.classList.add('flash');
   }
 
+  const pagesLabel = (at) => at ? (at.n === 2 ? `p. ${at.from}–${at.from + 1}` : `p. ${at.from}`) : '';
+  const stateLabel = (s) => {
+    const job = activeJobs.get(`shot:${s.id}`);
+    if (s.status === 'done') return `klaar · ${s.confidence ?? '?'}% zeker`;
+    if (s.status === 'error') return 'herkennen mislukt · klik om opnieuw te proberen';
+    if (job) return `herkennen… <span data-prog="${s.id}">${job.pct ? job.pct + '%' : ''}</span>`;
+    return 'wacht op herkenning';
+  };
+
+  let drawing = null, again = false;
+  /** Tekent de lijst opnieuw; tegelijk binnenkomende verzoeken worden samengevoegd. */
   async function drawInbox() {
-    if (!alive) return;
-    const items = await inboxOf(id);
-    const b = await db.get('books', id);
-    $('#next-p').textContent = b ? b.nextPage : '';
-    $('#inbox-n').textContent = items.length ? `(${items.length})` : '';
-    $('#review').disabled = !items.length;
-    urls.splice(0).forEach(u => URL.revokeObjectURL(u));
-    $('#inbox').innerHTML = items.length ? items.map((s, i) => {
-      const u = URL.createObjectURL((s.status === 'done' && s.rotated) || s.image); urls.push(u);
-      const st = s.status === 'done' ? `klaar · ${s.confidence ?? '?'}% zeker`
-        : s.status === 'busy' ? `herkennen… <span data-prog="${s.id}"></span>`
-        : s.status === 'error' ? 'herkennen mislukt' : 'wacht';
-      return `<li class="inbox-row">
-        <img src="${u}" alt="Opname ${i + 1}">
-        <span class="inbox-txt"><strong>${i + 1}</strong> <span class="muted small">${st}</span></span>
-        <button class="icon-btn" data-act="del-shot" data-id="${s.id}" aria-label="Opname weggooien">${icon('trash')}</button>
-      </li>`;
-    }).join('') : '<li class="muted small">Nog geen opnames. Ze verschijnen hier zodra de iPhone een pagina opneemt.</li>';
+    if (drawing) { again = true; return drawing; }
+    drawing = (async () => {
+      do {
+        again = false;
+        if (!alive) return;
+        const [items, b, draft] = await Promise.all([inboxOf(id), db.get('books', id), db.get('drafts', id)]);
+        if (!alive || !b) return;
+        const at = pagesFor(b, items, draft);
+        $('#next-p').textContent = b.nextPage;
+        $('#inbox-n').textContent = items.length ? `(${items.length})` : '';
+        $('#review').disabled = !items.length && !draft;
+        $('#review').textContent = draft ? 'Verder met nakijken' : 'Nakijken en opslaan';
+        // Voorbeeldfoto's maar één keer laden; die van verdwenen opnames opruimen.
+        const ids = new Set(items.map(s => s.id));
+        for (const [k, u] of thumbs) if (!ids.has(k)) { URL.revokeObjectURL(u); thumbs.delete(k); }
+        for (const s of items) if (!thumbs.has(s.id) && s.thumb) thumbs.set(s.id, URL.createObjectURL(s.thumb));
+        const rows = items.map((s, i) => `<li class="inbox-row${s.status === 'error' ? ' inbox-err' : ''}">
+            <button class="inbox-open" data-act="open-shot" data-id="${s.id}" aria-label="Opname ${i + 1} nakijken">
+              ${thumbs.has(s.id) ? `<img src="${thumbs.get(s.id)}" alt="">` : '<span class="inbox-ph"></span>'}
+              <span class="inbox-txt"><strong>${i + 1}</strong> <span class="muted small">${esc(pagesLabel(at.get(s.id)))}</span>
+                <span class="muted small">${stateLabel(s)}</span></span>
+            </button>
+            <button class="icon-btn" data-act="del-shot" data-id="${s.id}" aria-label="Opname ${i + 1} weggooien">${icon('trash')}</button>
+          </li>`);
+        if (draft) {
+          rows.unshift(`<li class="inbox-row inbox-cur">
+            <button class="inbox-open" data-act="review" aria-label="Verder met nakijken">
+              <span class="inbox-ph"></span>
+              <span class="inbox-txt"><strong>Open</strong> <span class="muted small">p. ${draft.pageNumber}${draft.text2 != null ? `–${draft.pageNumber + 1}` : ''}</span>
+                <span class="muted small">${draft.text != null ? 'wordt nagekeken' : 'wordt herkend'}</span></span>
+            </button>
+          </li>`);
+        }
+        $('#inbox').innerHTML = rows.length ? rows.join('') : '<li class="muted small">Nog geen opnames. Ze verschijnen hier zodra de iPhone een pagina opneemt.</li>';
+        for (const s of items) if (!s.thumb) addThumb(s.id);
+      } while (again && alive);
+    })().finally(() => { drawing = null; });
+    return drawing;
   }
 
-  /** Herkent de opnames één voor één op de achtergrond, zodat nakijken daarna direct kan. */
-  let working = false;
-  async function work() {
-    if (working) return;
-    working = true;
-    try {
-      while (alive) {
-        const s = (await inboxOf(id)).find(x => x.status === 'new' || x.status === 'busy');
-        if (!s) break;
-        s.status = 'busy';
-        await shots.put(s);
-        await drawInbox();
-        let res = null;
-        const job = ocr.recognize(s.image, book.lang, (m) => {
-          const el = document.querySelector(`[data-prog="${s.id}"]`);
-          if (el && m.status === 'recognizing text') el.textContent = Math.round(m.progress * 100) + '%';
-        });
-        deskJob = job.catch(() => {});
-        try { res = await job; } catch (err) { console.error(err); }
-        const cur = await shots.get(s.id);
-        if (!cur) continue;   // intussen weggegooid of al in het nakijkscherm
-        if (res) {
-          Object.assign(cur, {
-            status: 'done', confidence: res.confidence, rotated: res.image || null,
-            text: res.pages && res.pages.length === 2 ? res.pages[0].text : res.text,
-            text2: res.pages && res.pages.length === 2 ? res.pages[1].text : null,
-          });
-        } else cur.status = 'error';
-        // Dezelfde pagina's als de vorige opname (niet omgeslagen)? Dan niet nog eens nakijken.
-        if (res && overlap([cur.text, cur.text2].filter(Boolean).join('\n'), await previousText(id, cur.id)) >= 0.7) {
-          await shots.del(cur.id);
-          toast('Dubbele opname weggelaten: dezelfde pagina\'s als de vorige');
-          await drawInbox();
-          continue;
-        }
-        await shots.put(cur);
-        if (res && !turn.manual && res.confidence >= 60) setTurn(res.rotated || 0, false);
-        await drawInbox();
-      }
-    } finally { working = false; }
-  }
+  const offBus = bus.on((ev) => {
+    if (!alive) return;
+    if (ev.type === 'turn') { if (lastFrame) drawFrame(lastFrame); return; }
+    if (ev.type === 'progress') {
+      const el = document.querySelector(`[data-prog="${ev.key.slice(5)}"]`);
+      if (el) el.textContent = ev.pct + '%';
+      return;
+    }
+    drawInbox();
+  });
+
+  const capture = () => { if (link.connected) link.send({ t: 'capture' }); };
+  const toggleAuto = () => {
+    if (!link.connected) return;
+    const on = !$('#auto').dataset.on;
+    setAuto(on);
+    link.send({ t: 'auto', on });
+  };
+  const openShot = async (shotId) => {
+    const draft = await db.get('drafts', id);
+    if (draft && draft.shotId === shotId) return go(`#/boek/${id}/scan`);
+    if (draft && draft.fromLamp) await returnDraft(id);
+    else if (draft) {
+      // Een concept dat niet van de lamp komt eerst afmaken.
+      toast('Rond eerst de open scan af');
+      return go(`#/boek/${id}/scan`);
+    }
+    if (await takeFromInbox(id, shotId)) go(`#/boek/${id}/scan`);
+  };
 
   const onKey = (e) => {
-    if (e.target.closest('input, textarea')) return;
+    if (e.target.closest('input, textarea, select, [contenteditable]')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.code === 'Space') { e.preventDefault(); if (link.connected) link.send({ t: 'capture' }); }
-    if (e.code === 'KeyR') setTurn(turn.deg + 90, true);
+    if (document.querySelector('.sheet-wrap')) return;
+    // Spatie neemt altijd op, ook als er net op een knop geklikt is (die knop niet nog eens indrukken).
+    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) capture(); return; }
+    if (e.repeat) return;
+    if (e.code === 'KeyR') lampTurn.set(lampTurn.state.deg + 90, true);
     if (e.code === 'KeyZ') setZoom(!zoomOn);
-    if (e.code === 'KeyA' && link.connected) { const on = !$('#auto').dataset.on; setAuto(on); link.send({ t: 'auto', on }); }
+    if (e.code === 'KeyA') toggleAuto();
   };
+  const onKeyUp = (e) => { if (e.code === 'Space' && !e.target.closest('input, textarea, select')) e.preventDefault(); };
   const onClick = async (e) => {
     const el = e.target.closest('[data-act]');
     if (!el) return;
     const act = el.dataset.act;
-    if (act === 'shoot') return link.send({ t: 'capture' });
-    if (act === 'turn') return setTurn(turn.deg + 90, true);
+    // Knoppen in de balk niet vasthouden als focus: anders drukt de spatiebalk ze ook in.
+    if (el.closest('.desk-bar')) el.blur();
+    if (act === 'shoot') return capture();
+    if (act === 'turn') return lampTurn.set(lampTurn.state.deg + 90, true);
     if (act === 'zoom') return setZoom(!zoomOn);
-    if (act === 'auto') { const on = !el.dataset.on; setAuto(on); return link.send({ t: 'auto', on }); }
+    if (act === 'auto') return toggleAuto();
     if (act === 'del-shot') { await shots.del(+el.dataset.id); return drawInbox(); }
+    if (act === 'open-shot') return openShot(+el.dataset.id);
     if (act === 'review') {
       if (await db.get('drafts', id)) return go(`#/boek/${id}/scan`);
       if (await takeFromInbox(id)) go(`#/boek/${id}/scan`);
     }
   };
   document.addEventListener('keydown', onKey);
+  document.addEventListener('keyup', onKeyUp);
   app.addEventListener('click', onClick);
   cleanup = () => {
     alive = false;
     d.ui = null;   // de verbinding blijft open, zodat opnames binnenkomen terwijl je nakijkt
+    offBus();
     document.removeEventListener('keydown', onKey);
+    document.removeEventListener('keyup', onKeyUp);
     app.removeEventListener('click', onClick);
     if (lastFrame) lastFrame.close();
-    urls.forEach(u => URL.revokeObjectURL(u));
+    thumbs.forEach(u => URL.revokeObjectURL(u));
   };
 
   await drawInbox();
-  work();
+  bg.kick();
 }
 
 /** Bekijken / bewerken van een opgeslagen pagina. */
@@ -1243,7 +1467,8 @@ async function copyText(text) {
 
 async function shareFile(name, text, type = 'text/markdown') {
   const file = new File([text], name, { type });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+  // Op de computer gewoon downloaden (naar Downloads); het deelmenu is daar geen opslaan.
+  if (PHONE && navigator.canShare && navigator.canShare({ files: [file] })) {
     try { await navigator.share({ files: [file], title: name }); return; }
     catch (err) { if (err.name === 'AbortError') return; }
   }
@@ -1284,7 +1509,7 @@ async function viewExport(id) {
       </section>
       <footer class="dock dock-2">
         <button class="btn btn-quiet" data-act="copy">${icon('copy')} Kopiëren</button>
-        <button class="btn btn-primary" data-act="share">${icon('share')} Bewaar / deel</button>
+        <button class="btn btn-primary" data-act="share">${icon('share')} ${PHONE ? 'Bewaar / deel' : 'Downloaden (.md)'}</button>
       </footer>
     `);
     $('#sel')?.addEventListener('change', (e) => { sel = e.target.value; draw(); });
@@ -1311,7 +1536,7 @@ async function viewBackup() {
     <section class="view">
       <header class="top"><a class="back" href="#/">${icon('back')} Boeken</a></header>
       <h1 class="h1">Back-up</h1>
-      <p class="lead">Je boeken staan alleen op deze iPhone. Maak af en toe een back-up, bijvoorbeeld naar iCloud Drive via "Bewaar in Bestanden".</p>
+      <p class="lead">Je boeken staan alleen op ${PHONE ? 'deze iPhone' : 'deze computer'}. Maak af en toe een back-up, bijvoorbeeld naar iCloud Drive${PHONE ? ' via "Bewaar in Bestanden"' : ''}.</p>
       <div class="stack">
         <button class="btn btn-quiet btn-block" data-act="export">${icon('share')} Back-up maken</button>
         <button class="btn btn-quiet btn-block" data-act="import">Back-up terugzetten</button>
@@ -1319,7 +1544,7 @@ async function viewBackup() {
       <p class="muted small">De back-up bevat alle teksten, hoofdstukken en voortgang, zonder foto's.</p>
       ${usage ? `<p class="muted small">${usage}${persisted ? ' · opslag beschermd' : ''}</p>` : ''}
       <hr class="rule">
-      <p class="muted small">Boekscanner werkt offline. De tekstherkenning gebeurt op je telefoon; er wordt niets verstuurd.</p>
+      <p class="muted small">Boekscanner werkt offline. De tekstherkenning gebeurt op ${PHONE ? 'je telefoon' : 'je computer'}; er wordt niets verstuurd.</p>
     </section>
   `);
 
@@ -1378,3 +1603,5 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 route();
+// Opnames die nog niet herkend waren (bijvoorbeeld na herladen) alvast oppakken.
+if (!PHONE) bg.kick();

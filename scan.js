@@ -19,9 +19,16 @@ export function grayFromCanvas(c) {
   return { g, W, H };
 }
 
-export function canvasFromGray({ g, W, H }) {
+/** Canvas van w×h: een gewone canvas op de pagina, een OffscreenCanvas in een worker. */
+export function newCanvas(w, h) {
+  if (typeof document === 'undefined') return new OffscreenCanvas(w, h);
   const c = document.createElement('canvas');
-  c.width = W; c.height = H;
+  c.width = w; c.height = h;
+  return c;
+}
+
+export function canvasFromGray({ g, W, H }) {
+  const c = newCanvas(W, H);
   const ctx = c.getContext('2d');
   const id = ctx.createImageData(W, H), d = id.data;
   for (let i = 0, j = 0; j < g.length; i += 4, j++) { d[i] = d[i + 1] = d[i + 2] = g[j]; d[i + 3] = 255; }
@@ -741,8 +748,7 @@ export function cropForOcr(img, box, targetH = 48) {
   const { g, W } = img;
   const bw = box.x1 - box.x0, bh = box.y1 - box.y0;
   const sc = targetH / bh, pad = 20;
-  const c = document.createElement('canvas');
-  c.width = Math.round(bw * sc) + pad * 2; c.height = targetH + pad * 2;
+  const c = newCanvas(Math.round(bw * sc) + pad * 2, targetH + pad * 2);
   const ctx = c.getContext('2d');
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
   const src = canvasFromGray({ g: (() => {
