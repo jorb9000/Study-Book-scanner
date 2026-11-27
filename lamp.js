@@ -14,8 +14,9 @@ const SAMPLE_MS = 100;        // hoe vaak het voorbeeldbeeld wordt vergeleken
 const THUMB_W = 192;          // breedte van het vergelijkingsbeeld in pixels
 const STILL_MS = 800;         // zo lang moet het beeld stil zijn voor een opname
 const MIN_MOVE = 4;           // gemiddeld grijsverschil (0–255) dat als beweging telt
-const MIN_STILL = 1.2;        // ondergrens voor "stil", ook bij een heel rustig beeld
+const MIN_STILL = 2;          // ondergrens voor "stil": een hand die de bladzijde vasthoudt trilt een beetje
 const MIN_CHANGE = 2.5;       // verschil met de vorige opname dat als nieuwe pagina telt
+const TURN_MOVE = 10;         // zoveel beweging is omslaan: dan altijd een nieuwe opname, ook als de pagina erg lijkt op de vorige
 const JPEG_QUALITY = 0.92;
 
 /* ---------- Opslag ---------- */
@@ -77,18 +78,18 @@ function diff(a, b) {
  * Een stilliggende hand op de rand van het boek mag; die beweegt niet.
  */
 function createTrigger() {
-  let prev = null, noise = 1, stillSince = 0, armed = true, last = null;
+  let prev = null, noise = 1, stillSince = 0, armed = true, last = null, peak = Infinity;
   return {
     get noise() { return noise; },
     reset() { armed = true; stillSince = 0; },
-    taken(thumb) { last = thumb; armed = false; },
+    taken(thumb) { last = thumb; armed = false; peak = 0; },
     step(thumb, now) {
       const d = diff(thumb, prev);
       prev = thumb;
       const stillT = Math.max(MIN_STILL, noise * 1.8);
       const moveT = Math.max(MIN_MOVE, noise * 4);
       let state;
-      if (d === Infinity || d > moveT) { state = 'move'; stillSince = 0; armed = true; }
+      if (d === Infinity || d > moveT) { state = 'move'; stillSince = 0; armed = true; peak = Math.max(peak, d); }
       else if (d < stillT) {
         state = 'still';
         noise = noise * 0.95 + d * 0.05;
@@ -96,8 +97,13 @@ function createTrigger() {
       } else { state = 'unsure'; stillSince = 0; }
       const change = diff(thumb, last);
       const ready = state === 'still' && armed && now - stillSince >= STILL_MS;
-      if (ready && change < MIN_CHANGE) armed = false;   // stilgehouden zonder om te slaan
-      return { state, d, change, fire: ready && change >= MIN_CHANGE };
+      // Nieuwe pagina: duidelijk omgeslagen (veel beweging), of duidelijk ander beeld dan de vorige opname.
+      // Pagina's met lopende tekst lijken in het kleine vergelijkingsbeeld erg op elkaar, dus alleen
+      // het beeldverschil is niet genoeg.
+      const fresh = change >= MIN_CHANGE || peak >= TURN_MOVE;
+      const same = ready && !fresh;
+      if (same) armed = false;   // stilgehouden zonder om te slaan
+      return { state, d, change, same, fire: ready && fresh };
     },
   };
 }
@@ -107,7 +113,7 @@ function createTrigger() {
 const video = $('#video');
 const thumbCanvas = document.createElement('canvas');
 const trigger = createTrigger();
-let stream = null, timer = null, wakeLock = null, audio = null, auto = true, busy = false;
+let stream = null, timer = null, wakeLock = null, audio = null, auto = true, busy = false, sameShown = 0;
 
 async function startCamera() {
   stopCamera();
@@ -165,7 +171,9 @@ function tick() {
   const thumb = grab(video, thumbCanvas);
   const r = trigger.step(thumb, performance.now());
   const el = $('#state');
-  el.textContent = auto ? LABEL[r.state] : `${LABEL[r.state]} · auto uit`;
+  if (r.same) sameShown = performance.now();
+  const label = r.state === 'still' && performance.now() - sameShown < 3000 ? 'stil · zelfde pagina' : LABEL[r.state];
+  el.textContent = auto ? label : `${label} · auto uit`;
   el.className = 'pill ' + (r.state === 'still' ? 'still' : 'move');
   if (auto && r.fire) capture(thumb);
 }

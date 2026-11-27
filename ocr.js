@@ -43,7 +43,47 @@ function collectLines(blocks) {
       y0: Math.min(...w.map(x => x.bbox.y0)), y1: Math.max(...w.map(x => x.bbox.y1)),
     });
   } });
-  return lines;
+  return reorder(lines);
+}
+
+/** Tesseract knipt regels op een kromme of onscherpe pagina soms in stukken, verdeeld over
+    verschillende blokken, waardoor de volgorde niet meer klopt. Stukken op dezelfde hoogte
+    worden weer één regel; bij één tekstkolom komen de regels daarna gewoon van boven naar beneden. */
+function reorder(lines) {
+  if (lines.length < 3) return lines;
+  const vOverlap = (a, b) => Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+  const sorted = [...lines].sort((a, b) => a.x0 - b.x0);
+  const out = [];
+  for (const l of sorted) {
+    const h = l.y1 - l.y0;
+    const m = out.find(o => {
+      const gap = l.x0 - o.x1;
+      return vOverlap(o, l) > 0.6 * Math.min(h, o.y1 - o.y0) && gap > -o.size * 0.5 && gap < Math.max(o.size, l.size) * 2.5;
+    });
+    if (!m) { out.push({ ...l }); continue; }
+    const n = m.words + l.words;
+    m.conf = (m.conf * m.words + l.conf * l.words) / n;
+    if (l.words > m.words) m.block = l.block;
+    m.text = `${m.text} ${l.text}`;
+    m.words = n; m.x1 = Math.max(m.x1, l.x1);
+    m.y0 = Math.min(m.y0, l.y0); m.y1 = Math.max(m.y1, l.y1);
+  }
+  const full = out.filter(l => l.words >= 4);
+  if (full.length >= 5) {
+    const c0 = median(full.map(l => l.x0)), c1 = median(full.map(l => l.x1));
+    const inCol = (l) => Math.min(l.x1, c1) - Math.max(l.x0, c0) > 0.5 * (l.x1 - l.x0);
+    if (full.filter(inCol).length >= full.length * 0.85) {
+      out.sort((a, b) => (a.y0 + a.y1) - (b.y0 + b.y1));
+      // Eén kolom: Tesseracts blokindeling is dan willekeurig; alinea's volgen uit inspringen en witregels.
+      const cnt = {};
+      for (const l of out) cnt[l.block] = (cnt[l.block] || 0) + l.words;
+      const main = +Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0];
+      for (const l of out) l.block = main;
+      return out;
+    }
+  }
+  // Meer kolommen: Tesseracts volgorde aanhouden.
+  return lines.map(l => out.find(o => o.text.startsWith(l.text)) || null).filter((o, i, a) => o && a.indexOf(o) === i);
 }
 
 /** Bouwt Markdown uit de regels die Tesseract vindt: alinea's, koppen, citaten en opsommingen.
@@ -309,6 +349,71 @@ function score(blocks) {
   return s;
 }
 
+/* ---------- Woordcontrole (Nederlands) ---------- */
+
+// Tesseract verwart in sommige boekletters de t met een r en de e met een c ("her" voor "het",
+// "cen" voor "een"). Met een frequentielijst van Nederlandse woorden zetten we dat terug, maar
+// alleen als de verbeterde vorm veel gewoner is (of het gelezen woord niet bestaat).
+let freqList = null;
+export function loadWordFreq() {
+  if (!freqList) {
+    freqList = fetch(new URL('vendor/lang/nl-woorden.txt', import.meta.url))
+      .then(r => (r.ok ? r.text() : ''))
+      .then(t => {
+        const m = new Map();
+        for (const line of t.split('\n')) {
+          if (!line || line[0] === '#') continue;
+          const [b, ...ws] = line.split(' ');
+          for (const w of ws) if (!m.has(w)) m.set(w, +b);
+        }
+        return m;
+      })
+      .catch(() => new Map());
+  }
+  return freqList;
+}
+
+const SWAPS = [['r', 't'], ['c', 'e']];
+// Echte woorden die op een verbetering lijken: niet aankomen.
+const KEEP = new Set(['war', 'staar', 'gaar', 'weren', 'roe', 'wc', 'doc', 'ic', 'four', 'rot', 'rand', 'ras', 'rap']);
+
+function variants(w) {
+  const out = new Set();
+  for (const [a, b] of SWAPS) {
+    const idx = [];
+    for (let i = 0; i < w.length && idx.length < 4; i++) if (w[i] === a) idx.push(i);
+    for (let mask = 1; mask < 1 << idx.length; mask++) {
+      const l = [...w];
+      idx.forEach((i, k) => { if (mask & (1 << k)) l[i] = b; });
+      out.add(l.join(''));
+    }
+  }
+  return out;
+}
+
+const matchCase = (orig, w) => orig === orig.toUpperCase() && orig.length > 1 ? w.toUpperCase()
+  : orig[0] === orig[0].toUpperCase() ? w[0].toUpperCase() + w.slice(1) : w;
+
+export function fixWords(text, freq) {
+  let fixed = 0;
+  if (!freq || !freq.size) return { text, fixed };
+  const out = text.replace(/\p{L}+/gu, (orig) => {
+    const w = orig.toLowerCase();
+    // Hoofdletterwoorden (afkortingen, namen in kapitalen) laten we staan.
+    if (!/[rc]/.test(w) || KEEP.has(w) || w.length > 16 || (orig.length > 1 && orig === orig.toUpperCase())) return orig;
+    const own = freq.has(w) ? freq.get(w) : -1;
+    if (own < 0 && !/[aeiouyáéëïóöü]/.test(w)) return orig; // geen klinker: geen woord om te verbeteren
+    let best = null, bb = -1;
+    for (const v of variants(w)) { const b = freq.get(v); if (b != null && b > bb) { bb = b; best = v; } }
+    // Onbekend woord: verbeteren als de andere vorm gewoon voorkomt. Bekend woord: alleen als
+    // de andere vorm minstens zo'n 64 keer vaker voorkomt (6 frequentiebanden).
+    if (!best || (own < 0 ? bb < 7 : bb - own < 6)) return orig;
+    fixed++;
+    return matchCase(orig, best);
+  });
+  return { text: out, fixed };
+}
+
 /** Strenger: alleen gewone woorden in kleine letters met een klinker (onzin uit een gedraaide foto valt weg). */
 function wordScore(blocks) {
   let s = 0;
@@ -386,6 +491,12 @@ export const ocr = {
       pages.push(await this.recognizePage(w, prep.pages[i], prep.steps, onProgress && ((m) => {
         onProgress(m.status === 'recognizing text' ? { ...m, progress: (i + m.progress) / prep.pages.length } : m);
       })));
+    }
+    if (lang.split('+').includes('nld')) {
+      const freq = await loadWordFreq();
+      let n = 0;
+      for (const p of pages) { const r = fixWords(p.text, freq); p.text = r.text; n += r.fixed; }
+      if (n) prep.steps.push(`woorden ×${n}`);
     }
     const text = pages.map(p => p.text).join('\n\n');
     const confidence = Math.round(pages.reduce((s, p) => s + p.confidence, 0) / pages.length);
