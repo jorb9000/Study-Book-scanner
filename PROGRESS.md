@@ -20,6 +20,8 @@
 - Back-up/terugzetten (JSON, zonder foto's), persistente opslag aangevraagd
 - iOS: camera altijd direct vanuit een tik geopend; knoppenbalk verborgen tijdens typen
 
+- Computer: herkenning in een eigen worker (pagina blijft klikbaar), wachtrij op de achtergrond voor alle opnames, opnames los aanklikbaar met verwachte paginanummers; flowtest met nepcamera (`tests/run-flow-test.mjs`)
+
 ## Getest (Chromium, iPhone 13-formaat)
 - Volledige flow, herladen tijdens beoordelen, opslaan & volgende, gaten en terugspringen, overschrijven, opnieuw scannen
 - Offline herladen en offline herkenning

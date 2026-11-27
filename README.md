@@ -16,7 +16,7 @@ Zet de iPhone via MagSafe op een bureaulamp, **liggend**, met de lens vrij over 
 2. Klik op **Scannen met de lamp**. Er verschijnt een QR-code.
 3. Richt de **Camera-app** van je iPhone op de QR-code en tik op de link. Tik daarna één keer op het scherm van de iPhone en leg hem op de lamp. Een volgende keer kun je de pagina gewoon weer openen: hij onthoudt de koppeling.
 4. Op de computer zie je het live beeld. Blader om en houd stil: de iPhone neemt vanzelf op. Of druk op de **spatiebalk**. Met **A** zet je automatisch opnemen aan of uit. Met **R** (of **Draaien**) draai je het live beeld een kwartslag; na de eerste herkende opname gebeurt dat vanzelf. Met **Z** (**Inzoomen**) zoomt het beeld in op de pagina's. Dat is alleen de weergave: de iPhone blijft op 1x en de opname is altijd het hele beeld.
-5. Elke opname komt direct op de computer binnen en wordt op de achtergrond herkend. Met **Nakijken en opslaan** loop je ze één voor één door. Een opname van een open boek wordt twee pagina's.
+5. Elke opname komt direct op de computer binnen en wordt op de achtergrond herkend, ook als je intussen iets anders doet. In de lijst **Opnames** zie je per opname welke pagina's het waarschijnlijk zijn. Klik op een opname om hem na te kijken, ook als hij nog herkend wordt. Met **Nakijken en opslaan** loop je ze één voor één door. Een opname van een open boek wordt twee pagina's.
 6. Stoppen mag op elk moment. De volgende keer staat het boek al op de juiste pagina.
 
 De iPhone laat alleen het camerabeeld en een statuslampje zien (groen: klaar, oranje: zoekt computer of beweging). Na een paar seconden wordt het scherm donker; tik erop om het weer te zien.
@@ -37,7 +37,7 @@ Heb je eerder op de iPhone zelf gescand? Open de app op de iPhone, tik op **Back
 
 ## Exporteren en back-up
 
-- **Exporteren** (bij Pagina's): de hele tekst of één hoofdstuk als Markdown-bestand (`.md`). Het bestand komt in Downloads op je computer. **Kopiëren** zet de tekst op het klembord.
+- **Exporteren** (bij Pagina's): de hele tekst of één hoofdstuk als Markdown-bestand (`.md`). Met **Downloaden (.md)** komt het bestand in Downloads op je computer. **Kopiëren** zet de tekst op het klembord.
 - **Back-up** (de ••• rechtsboven op het beginscherm): sla af en toe een back-up op in iCloud Drive. Daarin staan alle teksten en de voortgang, zonder foto's. Met **Back-up terugzetten** haal je alles terug, ook op een andere computer.
 
 ## Publiceren op GitHub Pages
@@ -57,6 +57,7 @@ Gewone HTML, CSS en JavaScript, zonder build-stap.
 | `app.js` | Opslag (IndexedDB), schermen, scannen, export |
 | `scan.js` | Voorbewerking van de foto: pagina vinden, perspectief, scheefstand, kromme regels, kaderlijnen, grote beginletters |
 | `ocr.js` | Tekstherkenning en het opbouwen van de Markdown (alinea's, koppen, citaten, opsommingen) |
+| `ocr-worker.js`, `ocr-client.js` | Herkenning in een eigen worker met een wachtrij, zodat de app klikbaar blijft |
 | `koppel.js` | Koppeling iPhone ↔ computer (WebRTC via PeerJS) en opslag van opnames |
 | `lamp.html`, `lamp.js` | De camera op de iPhone: live beeld, automatisch opnemen bij stilstand |
 | `style.css` | Vormgeving (licht en donker) |
@@ -66,3 +67,5 @@ Gewone HTML, CSS en JavaScript, zonder build-stap.
 Lokaal testen: `python3 -m http.server 8080` in deze map, en dan naar `http://localhost:8080` gaan.
 
 Tekstherkenning testen: `node tests/run-ocr-tests.mjs` (Node en Playwright nodig). Dit herkent de testfoto's in `tests/fixtures` (scheef, opbollende pagina, omslag, studieboek met kader en opsommingen, en drie echte iPhone-foto's van een dik boek) en controleert de woorden en de opmaak. De uitvoer komt in `tests/out/`.
+
+De hele flow op de computer testen (koppelen, opnemen, nakijken, exporteren) met een nagemaakte iPhone-camera: `npm i --no-save peer && node tests/run-flow-test.mjs` (ook ffmpeg nodig).
