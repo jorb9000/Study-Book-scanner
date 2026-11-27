@@ -36,6 +36,12 @@ export function canvasFromGray({ g, W, H }) {
   return c;
 }
 
+/** Verkleiningsfactor zodat een stap op elke fotogrootte op dezelfde schaal werkt: f bij een
+    foto van zo'n 1240 pixels hoog (een liggende 4K-foto verkleind tot 2200), evenredig groter daarboven. */
+function workScale(img, f) {
+  return Math.max(f, Math.round((f * img.H) / 1240));
+}
+
 /** Verkleint met blokgemiddelde (voor snelle analyse). */
 function shrink({ g, W, H }, f) {
   const w = Math.max(1, Math.floor(W / f)), h = Math.max(1, Math.floor(H / f));
@@ -342,12 +348,13 @@ export function bookCrop(img) {
 export function findGutter(img, photo = null) {
   const { W: W0, H: H0 } = img;
   if (W0 < H0 * 1.1) return null;
-  const sm = shrink(img, 4);
+  const f = workScale(img, 4);
+  const sm = shrink(img, f);
   // Eerst: een strook zonder tekst tussen de pagina's. Lukt dat niet (kleine letters, schaduw in de
   // rug), dan de schaduw van de vouw zelf: een smal, donkerder dal in de helderheid van de foto.
   let x = gutterPass(sm, 0, 0.06);
-  if (x == null && photo) x = foldValley(shrink(photo, 4));
-  return x == null ? null : Math.round(x * 4);
+  if (x == null && photo) x = foldValley(shrink(photo, f));
+  return x == null ? null : Math.round(x * f);
 }
 
 function foldValley({ g, W, H }) {
@@ -388,20 +395,30 @@ function gutterPass({ g, W, H }, edge, lowF) {
   if (!inked.length) return null;
   const typical = inked[Math.floor(inked.length * 0.75)];
   const low = typical * lowF;
-  // Langste leeg stuk in het middengebied.
-  let best = null, start = -1;
+  // Lege stroken in het middengebied. De beste is breed én heeft aan beide kanten ongeveer evenveel
+  // tekst (een lege marge op een inhoudsopgave of een strook naast de lampkap is ook leeg, maar
+  // heeft aan één kant bijna niets).
+  const strips = [];
+  let start = -1;
   const a = Math.round(W * 0.25), b = Math.round(W * 0.75);
   for (let x = a; x <= b; x++) {
     const empty = x < b && sm[x] <= low;
     if (empty) { if (start < 0) start = x; }
-    else if (start >= 0) { if (!best || x - start > best[1] - best[0]) best = [start, x]; start = -1; }
+    else if (start >= 0) { if (x - start >= W * 0.012) strips.push([start, x]); start = -1; }
   }
-  if (!best || best[1] - best[0] < W * 0.012) return null;
-  const mid = (best[0] + best[1]) / 2;
-  let left = 0, right = 0;
-  for (let x = 0; x < W; x++) (x < mid ? (left += col[x]) : (right += col[x]));
-  if (Math.min(left, right) < (left + right) * 0.15) return null;
-  return mid;
+  const cum = new Float64Array(W + 1);
+  for (let x = 0; x < W; x++) cum[x + 1] = cum[x] + col[x];
+  let best = null, bs = 0;
+  for (const [s0, s1] of strips) {
+    const mid = (s0 + s1) / 2;
+    const left = cum[Math.round(mid)], right = cum[W] - left;
+    const bal = Math.min(left, right) / Math.max(1, left + right);
+    if (bal < 0.15) continue;
+    const sc = (s1 - s0) * bal;
+    if (sc > bs) { bs = sc; best = mid; }
+  }
+  if (globalThis.__dbg) console.log('[ocr] rug', W, strips.map(([s0, s1]) => `${s0}-${s1}:${(Math.min(cum[Math.round((s0 + s1) / 2)], cum[W] - cum[Math.round((s0 + s1) / 2)]) / cum[W]).toFixed(2)}`).join(' '), '→', best);
+  return best;
 }
 
 /** Knipt een stuk [x0, x1) uit een grijsbeeld. */
@@ -469,6 +486,22 @@ export function rotate(img, deg) {
 
 /* ---------- 4. Kromme regels rechttrekken ---------- */
 
+/** Regelafstand in pixels (uit de autocorrelatie van het rijprofiel), of 0 als die niet te vinden is. */
+export function lineSpacing(img) {
+  const f = Math.max(1, Math.round(img.H / 1200));
+  const { g, W, H } = f > 1 ? shrink(img, f) : img;
+  const x0 = Math.round(W * 0.25), x1 = Math.round(W * 0.75);
+  const prof = new Float64Array(H);
+  for (let y = 0; y < H; y++) { let c = 0; for (let x = x0; x < x1; x++) c += g[y * W + x] < 150 ? 1 : 0; prof[y] = c; }
+  let mean = 0; for (let y = 0; y < H; y++) mean += prof[y]; mean /= H;
+  const maxLag = Math.min(200, H >> 2);
+  const ac = new Float64Array(maxLag + 2);
+  for (let lag = 3; lag <= maxLag + 1; lag++) { let v = 0; for (let y = 0; y + lag < H; y++) v += (prof[y] - mean) * (prof[y + lag] - mean); ac[lag] = v; }
+  let top = 0; for (let lag = 5; lag <= maxLag; lag++) top = Math.max(top, ac[lag]);
+  for (let lag = 5; lag <= maxLag; lag++) if (ac[lag] >= ac[lag - 1] && ac[lag] >= ac[lag + 1] && ac[lag] > top * 0.6) return lag * f;
+  return 0;
+}
+
 /** Volgt elke tekstregel vanaf het midden naar links en rechts, en schuift elke kolom pixels
     zo omhoog of omlaag dat de regels weer recht liggen (tussen de regels wordt geïnterpoleerd). */
 export function dewarp(img) {
@@ -477,6 +510,18 @@ export function dewarp(img) {
   const { g, W, H } = s;
   const ink = new Uint8Array(W * H);
   for (let i = 0; i < ink.length; i++) ink[i] = g[i] < 150 ? 1 : 0;
+  // Lange donkere stukken (schaduw van de lampkap, bureau, rand van het boek) zijn geen letters.
+  // Een letter is nooit hoger dan de regelafstand.
+  const sp0 = lineSpacing(img);
+  const maxRun = sp0 ? Math.max(6, Math.round(sp0 / f)) : Math.max(20, Math.round(H * 0.04));
+  for (let x = 0; x < W; x++) {
+    for (let y = 0; y < H;) {
+      if (!ink[y * W + x]) { y++; continue; }
+      let e = y; while (e < H && ink[e * W + x]) e++;
+      if (e - y > maxRun) for (let k = y; k < e; k++) ink[k * W + x] = 0;
+      y = e;
+    }
+  }
   // Tekstgebied (zonder lege marges).
   const colInk = new Float64Array(W), rowInk = new Float64Array(H);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (ink[y * W + x]) { colInk[x]++; rowInk[y]++; }
@@ -632,7 +677,7 @@ export function dewarp(img) {
   // Lege kolommen aan het begin opvullen.
   for (let k = K - 2; k >= 0; k--) if (!lines.some(l => l.ok[k])) D[k].set(D[k + 1]);
   // Geen of een onwaarschijnlijk grote kromming (dan is er iets anders gevolgd dan tekstregels).
-  if (maxOff < 1 || maxOff > spacing * 3) return { img, warped: false };
+  if (maxOff < 1 || maxOff > spacing * 5) return { img, warped: false };
 
   const { g: G, W: FW, H: FH } = img;
   const srcX = Array.from({ length: FW }, (_, x) => x);

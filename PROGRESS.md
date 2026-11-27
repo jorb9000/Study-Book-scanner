@@ -20,6 +20,7 @@
 - Back-up/terugzetten (JSON, zonder foto's), persistente opslag aangevraagd
 - iOS: camera altijd direct vanuit een tik geopend; knoppenbalk verborgen tijdens typen
 
+- Nauwkeuriger herkenning, gemeten met `tests/run-accuracy.mjs` (10 nagekeken pagina's): ontkromming werkt nu ook op 4K-foto's en naast de lampkap, letters vergroot tot een vaste regelhoogte, zwart-wit per buurt (Sauvola) zodat tekst bij de rug heel blijft, rug bij een inhoudsopgave goed gevonden, vlekjes in de marge weg, ontbrekende afbreekstreepjes en aan elkaar geplakte woorden hersteld
 - Computer: herkenning in een eigen worker (pagina blijft klikbaar), wachtrij op de achtergrond voor alle opnames, opnames los aanklikbaar met verwachte paginanummers; flowtest met nepcamera (`tests/run-flow-test.mjs`)
 
 ## Getest (Chromium, iPhone 13-formaat)
@@ -31,4 +32,4 @@
 ## Nog niet gedaan
 - Publicatie op GitHub Pages (wacht op een repository)
 - Test op een echte iPhone (eerste test gedaan; nu opnieuw testen met de verbeterde herkenning)
-- Open boek: linkerpagina's van j2–j5 (onscherp, lampschaduw) matig; k1–k5 (scherpere foto's) 80–92%
+- Open boek: linkerpagina's van j2–j5 (onscherp, lampschaduw) matig. Lampfoto's k1–m013: gemiddeld ruim 97% woorden goed op de computer (was 91,5%)

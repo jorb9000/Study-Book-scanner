@@ -34,6 +34,7 @@ page.on('response', r => { if (r.status() >= 400) console.log('  http', r.status
 page.on('console', m => { if (m.type() === 'error' || m.text().startsWith('[ocr]')) console.log('  console:', m.text()); });
 await page.goto(`http://localhost:${port}/tests/ocr-test.html`);
 await page.waitForFunction(() => window.ready);
+if (process.env.CFG) await page.evaluate((c) => window.setConfig(c), JSON.parse(process.env.CFG));
 
 const words = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
 let failed = 0;
