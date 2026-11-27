@@ -34,15 +34,22 @@ Handig om te weten:
 
 ## Lampmodus (telefoon boven het boek)
 
-Voor een vaste opstelling, bijvoorbeeld met de telefoon via MagSafe op een bureaulamp boven het boek. Open **Lampmodus** onderaan het beginscherm (of `lamp.html`).
+Voor een vaste opstelling, bijvoorbeeld met de telefoon via MagSafe op een bureaulamp boven het boek.
 
-1. Leg de telefoon **liggend** op de lamp, met de lens vrij over de rand. De dubbele pagina moet bijna de hele breedte van het beeld vullen.
-2. Zet **Automatisch slot** op **Nooit** (Instellingen › Scherm en helderheid). De app vraagt zelf ook om het scherm aan te houden.
-3. Tik op **Camera starten**. Linksboven staat de resolutie; groen betekent 4K.
-4. Blader om en houd stil. Na ongeveer een seconde stilstand volgt een piep en een flits: de opname is gemaakt. Een hand die stil op de rand ligt is geen probleem. Stilhouden zonder om te slaan geeft geen dubbele opname.
-5. Bij **Opnames** zie je alles terug. **Alles delen** stuurt de foto's via AirDrop naar je computer.
+### Bediening vanaf de computer (aanbevolen)
 
-Dit is fase 1 van de opstelling met bediening vanaf de computer. In een volgende stap komen de opnames rechtstreeks op de computer binnen.
+1. Open de Boekscanner op je computer (Safari of Chrome), kies een boek en klik op **Scannen met de iPhone op de lamp**. Er verschijnt een QR-code.
+2. Richt de **Camera-app** van je iPhone op de QR-code en tik op de link. De lampmodus opent in Safari, al gekoppeld met je computer.
+3. Tik op **Camera starten**, zet **Automatisch slot** op **Nooit** (Instellingen › Scherm en helderheid) en leg de telefoon **liggend** op de lamp, lens vrij over de rand.
+4. Op de computer zie je het live beeld. Blader om en houd stil: de iPhone neemt vanzelf op. Of druk op de **spatiebalk**.
+5. Elke opname komt direct op de computer binnen en wordt daar op de achtergrond herkend. Met **Nakijken en opslaan** loop je ze daarna één voor één door, in het gewone nakijkscherm. Een opname van een open boek wordt twee pagina's.
+6. Exporteren gaat zoals altijd via **Exporteren**; het bestand komt in Downloads op je computer.
+
+iPhone en computer moeten op hetzelfde wifi-netwerk zitten. Alleen de kennismaking loopt via de gratis openbare PeerJS-server; de foto's gaan rechtstreeks van telefoon naar computer. Op een netwerk dat apparaten van elkaar afschermt (zoals eduroam) lukt dat niet: zet dan de hotspot van je iPhone aan en verbind de computer daarmee. Valt de verbinding weg, dan blijven opnames op de telefoon bewaard en worden ze verstuurd zodra de verbinding terug is.
+
+### Alleen de telefoon
+
+Open **Lampmodus** onderaan het beginscherm (of `lamp.html`). De opnames blijven dan op de telefoon; met **Alles delen** stuur je ze via AirDrop naar je computer.
 
 ## Exporteren en back-up
 

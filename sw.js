@@ -1,11 +1,12 @@
 /* Offline: app-bestanden vooraf, tekstherkenning bij eerste gebruik. */
-const VERSION = 'v4';
+const VERSION = 'v5';
 const SHELL = `boekscanner-shell-${VERSION}`;
 const OCR = 'boekscanner-ocr-v1';
 const FILES = [
-  './', 'index.html', 'style.css', 'app.js', 'ocr.js', 'scan.js', 'manifest.webmanifest',
+  './', 'index.html', 'style.css', 'app.js', 'ocr.js', 'scan.js', 'koppel.js', 'lamp.html', 'lamp.js', 'manifest.webmanifest',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
   'vendor/tesseract/tesseract.min.js', 'vendor/tesseract/worker.min.js',
+  'vendor/peerjs/peerjs.min.js', 'vendor/qrcode/qrcode.js',
 ];
 
 self.addEventListener('install', (e) => {

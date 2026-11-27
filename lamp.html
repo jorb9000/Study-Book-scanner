@@ -59,6 +59,7 @@
 <body>
   <section id="start" class="screen">
     <h1>Lampmodus</h1>
+    <p id="link-intro" hidden><strong>Gekoppeld via de QR-code.</strong> Je bedient alles vanaf je computer; de foto's gaan daar rechtstreeks naartoe over je wifi.</p>
     <p>De telefoon hangt boven het boek en werkt alleen als camera. Na elke omgeslagen pagina neemt hij vanzelf een foto zodra het beeld stil is.</p>
     <ol>
       <li>Leg de telefoon liggend op de lamp, lens vrij over de rand.</li>
@@ -79,6 +80,7 @@
       <span id="res" class="pill">…</span>
       <span id="state" class="pill">…</span>
       <span id="wake" class="pill">scherm</span>
+      <span id="link" class="pill" hidden></span>
       <span class="spacer"></span>
       <span id="count" class="pill">0 opnames</span>
     </div>
@@ -108,6 +110,7 @@
     <div id="grid"></div>
   </section>
 
+  <script src="vendor/peerjs/peerjs.min.js"></script>
   <script type="module" src="lamp.js"></script>
 </body>
 </html>

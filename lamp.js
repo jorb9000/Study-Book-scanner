@@ -18,35 +18,16 @@ const MIN_STILL = 2;          // ondergrens voor "stil": een hand die de bladzij
 const MIN_CHANGE = 2.5;       // verschil met de vorige opname dat als nieuwe pagina telt
 const TURN_MOVE = 10;         // zoveel beweging is omslaan: dan altijd een nieuwe opname, ook als de pagina erg lijkt op de vorige
 const JPEG_QUALITY = 0.92;
+const PREVIEW_MS = 300;        // live beeld naar de computer, ongeveer 3 per seconde
+const PREVIEW_W = 960;        // breedte van dat live beeld
 
-/* ---------- Opslag ---------- */
+/* ---------- Opslag en koppeling ---------- */
 
-const store = {
-  _db: null,
-  open() {
-    if (this._db) return Promise.resolve(this._db);
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open('boekscanner-lamp', 1);
-      req.onupgradeneeded = () => req.result.createObjectStore('shots', { keyPath: 'id' });
-      req.onsuccess = () => { this._db = req.result; resolve(this._db); };
-      req.onerror = () => reject(req.error);
-    });
-  },
-  async run(mode, fn) {
-    const d = await this.open();
-    return new Promise((resolve, reject) => {
-      const t = d.transaction('shots', mode);
-      const r = fn(t.objectStore('shots'));
-      t.oncomplete = () => resolve(r && r.result);
-      t.onerror = () => reject(t.error);
-    });
-  },
-  all() { return this.run('readonly', s => s.getAll()); },
-  count() { return this.run('readonly', s => s.count()); },
-  put(v) { return this.run('readwrite', s => s.put(v)); },
-  del(id) { return this.run('readwrite', s => s.delete(id)); },
-  clear() { return this.run('readwrite', s => s.clear()); },
-};
+import { shots as store, join, toBuffer } from './koppel.js';
+
+// Geopend via de QR-code op de computer? Dan is de telefoon alleen camera voor die computer.
+const code = new URLSearchParams(location.hash.slice(1)).get('koppel');
+let link = null;
 
 /* ---------- Beeldvergelijking ---------- */
 
@@ -113,7 +94,7 @@ function createTrigger() {
 const video = $('#video');
 const thumbCanvas = document.createElement('canvas');
 const trigger = createTrigger();
-let stream = null, timer = null, wakeLock = null, audio = null, auto = true, busy = false, sameShown = 0;
+let stream = null, timer = null, previewTimer = null, wakeLock = null, audio = null, auto = true, busy = false, sameShown = 0;
 
 async function startCamera() {
   stopCamera();
@@ -133,12 +114,14 @@ async function startCamera() {
   $('#res').title = big >= 3840 ? '4K' : 'Lager dan 4K: de tekst wordt minder scherp';
   trigger.reset();
   timer = setInterval(tick, SAMPLE_MS);
+  if (code) startLink();
   showStopped(false);
   await keepAwake();
 }
 
 function stopCamera() {
   clearInterval(timer); timer = null;
+  clearInterval(previewTimer); previewTimer = null;
   if (stream) stream.getTracks().forEach(t => t.stop());
   stream = null;
 }
@@ -164,6 +147,7 @@ document.addEventListener('visibilitychange', async () => {
   if (!live) showStopped(true);
 });
 
+let lastLabel = '';
 const LABEL = { move: 'beweging', still: 'stil', unsure: 'bijna stil' };
 
 function tick() {
@@ -175,6 +159,7 @@ function tick() {
   const label = r.state === 'still' && performance.now() - sameShown < 3000 ? 'stil · zelfde pagina' : LABEL[r.state];
   el.textContent = auto ? label : `${label} · auto uit`;
   el.className = 'pill ' + (r.state === 'still' ? 'still' : 'move');
+  lastLabel = el.textContent;
   if (auto && r.fire) capture(thumb);
 }
 
@@ -193,10 +178,11 @@ async function capture(thumb = null) {
     t.getContext('2d').drawImage(c, 0, 0, tw, th);
     const preview = await new Promise(r => t.toBlob(r, 'image/jpeg', 0.7));
     const n = (await store.count()) + 1;
-    await store.put({ id: Date.now(), n, width: w, height: h, image, preview, createdAt: new Date().toISOString() });
+    await store.put({ id: Date.now(), n, width: w, height: h, image, preview, createdAt: new Date().toISOString(), pending: !!code });
     trigger.taken(thumb || grab(video, thumbCanvas));
     feedback();
     await updateCount();
+    if (code) flush();
   } catch (err) {
     console.error(err);
     $('#state').textContent = 'opname mislukt'; $('#state').className = 'pill warn';
@@ -223,6 +209,74 @@ async function updateCount() {
   $('#count').textContent = `${n} ${n === 1 ? 'opname' : 'opnames'}`;
   $('#count0').textContent = n;
   return n;
+}
+
+/* ---------- Koppeling met de computer ---------- */
+
+let sending = false;
+
+function setLinkPill(on) {
+  const p = $('#link');
+  p.hidden = false;
+  p.textContent = on ? 'gekoppeld met computer' : 'zoekt computer…';
+  p.className = 'pill ' + (on ? 'still' : 'warn');
+}
+
+function startLink() {
+  if (!link) {
+    setLinkPill(false);
+    link = join(code, {
+      open() {
+        setLinkPill(true);
+        sent.clear();
+        const v = video;
+        link.send({ t: 'hello', w: v.videoWidth, h: v.videoHeight, auto });
+        flush();
+      },
+      close() { setLinkPill(false); },
+      message(m) {
+        if (!m || typeof m !== 'object') return;
+        if (m.t === 'capture') capture();
+        else if (m.t === 'auto') setAuto(!!m.on);
+        else if (m.t === 'ack') store.del(m.id).then(updateCount);
+      },
+    });
+  }
+  clearInterval(previewTimer);
+  previewTimer = setInterval(sendPreview, PREVIEW_MS);
+}
+
+/** Klein, snel beeld voor het live beeld op de computer. */
+const previewCanvas = document.createElement('canvas');
+let previewBusy = false;
+async function sendPreview() {
+  if (!link || !link.connected || previewBusy || !video.videoWidth || link.buffered > 512 * 1024) return;
+  previewBusy = true;
+  try {
+    const w = PREVIEW_W, h = Math.round(w * video.videoHeight / video.videoWidth);
+    if (previewCanvas.width !== w || previewCanvas.height !== h) { previewCanvas.width = w; previewCanvas.height = h; }
+    previewCanvas.getContext('2d').drawImage(video, 0, 0, w, h);
+    const b = await new Promise(r => previewCanvas.toBlob(r, 'image/jpeg', 0.6));
+    link.send({ t: 'preview', img: await toBuffer(b), state: lastLabel, auto, w: video.videoWidth, h: video.videoHeight });
+  } finally { previewBusy = false; }
+}
+
+/** Alle opnames die de computer nog niet heeft bevestigd, (opnieuw) versturen. */
+const sent = new Set();
+async function flush() {
+  if (!link || !link.connected || sending) return;
+  sending = true;
+  try {
+    for (;;) {
+      const todo = (await store.all()).filter(s => s.pending && !sent.has(s.id)).sort((a, b) => a.id - b.id);
+      if (!todo.length || !link.connected) break;
+      for (const s of todo) {
+        if (!link.connected) break;
+        link.send({ t: 'shot', id: s.id, w: s.width, h: s.height, img: await toBuffer(s.image), createdAt: s.createdAt });
+        sent.add(s.id);
+      }
+    }
+  } finally { sending = false; }
 }
 
 /* ---------- Opnames ---------- */
@@ -302,18 +356,24 @@ $('#to-shots').addEventListener('click', showShots);
 $('#back-cam').addEventListener('click', goCamera);
 $('#restart').addEventListener('click', goCamera);
 $('#shoot').addEventListener('click', () => capture());
-$('#auto').addEventListener('click', () => {
-  auto = !auto;
+function setAuto(on) {
+  auto = on;
   trigger.reset();
   const b = $('#auto');
   b.classList.toggle('on', auto);
   b.setAttribute('aria-pressed', String(auto));
   b.textContent = auto ? 'Auto aan' : 'Auto uit';
-});
+}
+$('#auto').addEventListener('click', () => setAuto(!auto));
 document.addEventListener('keydown', (e) => {
   if ($('#cam').hidden) return;
   if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); capture(); }
 });
+
+if (code) {
+  $('#start h1').textContent = 'Camera voor je computer';
+  $('#link-intro').hidden = false;
+}
 
 updateCount();
 

@@ -262,9 +262,13 @@ export async function resizeToBlob(blob, maxSide, quality = 0.85, rotate = 0) {
   return new Promise(r => c.toBlob(r, 'image/jpeg', quality));
 }
 
+/** Grootste zijde (pixels) waarmee een foto wordt herkend. Op de computer hoger, zodat een
+    4K-opname van een open boek vanaf de lamp niet onnodig wordt verkleind. */
+export const ocrConfig = { maxSide: 2200 };
+
 async function grayOf(blob) {
   const im = await loadImage(blob);
-  const scale = Math.min(1, 2200 / Math.max(im.naturalWidth, im.naturalHeight));
+  const scale = Math.min(1, ocrConfig.maxSide / Math.max(im.naturalWidth, im.naturalHeight));
   const c = document.createElement('canvas');
   c.width = Math.round(im.naturalWidth * scale); c.height = Math.round(im.naturalHeight * scale);
   c.getContext('2d', { willReadFrequently: true }).drawImage(im, 0, 0, c.width, c.height);
@@ -483,7 +487,7 @@ export const ocr = {
     const w = await this.get(lang);
     const deg = await this.orientation(blob, lang);
     let image = null;
-    if (deg) { image = await resizeToBlob(blob, 2200, 0.92, deg); blob = image; }
+    if (deg) { image = await resizeToBlob(blob, ocrConfig.maxSide, 0.92, deg); blob = image; }
     const prep = await prepareForOcr(blob);
     if (deg) prep.steps.unshift(`gedraaid ${deg}°`);
     const pages = [];

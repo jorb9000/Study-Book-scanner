@@ -1,7 +1,11 @@
 /* Boekscanner — scan een boek in delen, met voortgang per boek.
    Alles blijft lokaal op het toestel (IndexedDB). Geen build-stap nodig. */
 
-import { ocr, resizeToBlob } from './ocr.js';
+import { ocr, ocrConfig, resizeToBlob } from './ocr.js';
+import { shots, host, toBlob } from './koppel.js';
+
+// Op de computer foto's minder verkleinen: 4K-opnames van de lamp blijven dan scherp genoeg.
+if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) ocrConfig.maxSide = 4096;
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const app = $('#app');
@@ -220,6 +224,7 @@ async function route() {
       if (parts[2] === 'scan') return await viewReview(id);
       if (parts[2] === 'p' && parts[3]) return await viewPage(id, +parts[3]);
       if (parts[2] === 'export') return await viewExport(id);
+      if (parts[2] === 'lamp') return await viewDesk(id);
     }
     go('#/', true);
   } catch (err) {
@@ -365,6 +370,7 @@ async function viewBookForm(id) {
 async function viewBook(id) {
   const book = await db.get('books', id);
   if (!book) return go('#/', true);
+  const inboxN = (await inboxOf(id)).length;
   const pages = (await db.pagesOf(id)).sort((a, b) => a.pageNumber - b.pageNumber);
   const draft = await db.get('drafts', id);
   const pr = progressOf(book, pages);
@@ -395,6 +401,19 @@ async function viewBook(id) {
           <span>Scan van p. ${draft.pageNumber} is nog niet opgeslagen</span>
           <span class="chev">${icon('chev')}</span>
         </a>` : ''}
+
+      ${inboxN ? `
+        <a class="notice" href="#/boek/${id}/lamp">
+          <span class="dot"></span>
+          <span>${inboxN} ${inboxN === 1 ? 'opname' : 'opnames'} van de lamp om na te kijken</span>
+          <span class="chev">${icon('chev')}</span>
+        </a>` : ''}
+
+      <a class="notice notice-quiet" href="#/boek/${id}/lamp">
+        <span>${icon('camera')}</span>
+        <span>Scannen met de iPhone op de lamp, bediend vanaf deze computer</span>
+        <span class="chev">${icon('chev')}</span>
+      </a>
 
       <div class="next">
         <span class="muted small">Volgende pagina</span>
@@ -614,6 +633,7 @@ async function viewReview(id) {
     $('#conf').textContent = '';
     const bar = $('#ocr-bar'), label = $('#ocr-label');
     try {
+      await deskJob; // de herkenning op de achtergrond (lamp) eerst laten afronden
       const res = await ocr.recognize(draft.image, book.lang, (m) => {
         if (!alive) return;
         if (m.status === 'recognizing text') {
@@ -720,6 +740,12 @@ async function viewReview(id) {
       $('#photo img').src = URL.createObjectURL(draft.image);
       return runOcr(false);
     }
+    if (act === 'retake' && draft.fromLamp) {
+      book.nextPage = draft.pageNumber;
+      await Promise.all([db.del('drafts', id), db.put('books', book)]);
+      toast('Leg de pagina terug en neem hem opnieuw op');
+      return go(`#/boek/${id}/lamp`);
+    }
     if (act === 'retake') {
       book.nextPage = draft.pageNumber;
       openCamera(id, Promise.all([db.del('drafts', id), db.put('books', book)]));
@@ -740,6 +766,13 @@ async function viewReview(id) {
         next = false; // na een vraag mag iOS de camera niet meer openen; terug naar het boek
       }
       setButtons(false);
+      if (draft.fromLamp) {
+        // Opnames van de lamp: na opslaan meteen de volgende opname nakijken, anders terug naar het bureau.
+        await save();
+        toast(isSpread() ? `Pagina ${draft.pageNumber} en ${draft.pageNumber + 1} opgeslagen` : `Pagina ${draft.pageNumber} opgeslagen`);
+        if (next && await takeFromInbox(id)) return go(`#/boek/${id}/scan`, true);
+        return go(`#/boek/${id}/lamp`, true);
+      }
       if (next) {
         // Camera direct openen (iOS vereist dit binnen de tik); opslaan loopt parallel.
         const saving = save();
@@ -757,6 +790,263 @@ async function viewReview(id) {
   app.addEventListener('click', onClick);
   const prevCleanup = cleanup;
   cleanup = () => { prevCleanup(); app.removeEventListener('click', onClick); };
+}
+
+/* ---------- Bureau: iPhone op de lamp, bediening op de computer ---------- */
+
+let deskJob = Promise.resolve();   // herkenning die op de achtergrond loopt
+
+/** Opnames van de lamp die bij dit boek horen, op volgorde van opname. */
+async function inboxOf(bookId) {
+  return (await shots.all()).filter(s => s.bookId === bookId).sort((a, b) => a.id - b.id);
+}
+
+/** Zet de oudste opname van de lamp klaar als concept, zodat hij in het gewone nakijkscherm opent. */
+async function takeFromInbox(bookId) {
+  const book = await db.get('books', bookId);
+  const [s] = await inboxOf(bookId);
+  if (!book || !s) return false;
+  const done = s.status === 'done';
+  await db.put('drafts', {
+    bookId, pageNumber: book.nextPage,
+    image: (done && s.rotated) || s.image,
+    text: done ? s.text : null,
+    text2: done ? (s.text2 ?? null) : null,
+    confidence: done ? s.confidence : null,
+    rotate: 0, createdAt: Date.now(), fromLamp: true,
+  });
+  await shots.del(s.id);
+  return true;
+}
+
+/** De verbinding met de iPhone blijft bestaan zolang de app openstaat, ook tijdens het nakijken. */
+let desk = null;
+function ensureDesk(bookId) {
+  if (!desk) {
+    const d = desk = { bookId, ui: null, code: null };
+    d.link = host({
+      ready(code) { d.code = code; d.ui?.ready(code); },
+      open() { d.ui?.open(); },
+      close() { d.ui?.close(); },
+      error(text) { d.ui?.error(text); },
+      async message(m) {
+        if (!m || typeof m !== 'object') return;
+        if (m.t === 'shot') {
+          if (!await shots.get(m.id)) {
+            await shots.put({ id: m.id, bookId: d.bookId, width: m.w, height: m.h, image: toBlob(m.img), createdAt: m.createdAt, status: 'new' });
+          }
+          d.link.send({ t: 'ack', id: m.id });
+          if (d.ui) d.ui.shot(); else toast('Nieuwe opname van de lamp ontvangen');
+          return;
+        }
+        d.ui?.message(m);
+      },
+    });
+  }
+  desk.bookId = bookId;
+  return desk;
+}
+
+async function viewDesk(id) {
+  const book = await db.get('books', id);
+  if (!book) return go('#/', true);
+
+  render(`
+    <section class="view view-desk">
+      <header class="top">
+        <a class="back" href="#/boek/${id}">${icon('back')} ${esc(book.title)}</a>
+      </header>
+      <h1 class="h1">Scannen met de lamp</h1>
+
+      <div class="desk">
+        <div class="desk-main">
+          <div class="pair" id="pair">
+            <div class="qr" id="qr"><p class="muted small">Koppelcode maken…</p></div>
+            <div class="pair-text">
+              <h2>Koppel je iPhone</h2>
+              <ol class="muted small">
+                <li>Open de Camera-app op je iPhone en richt hem op deze code.</li>
+                <li>Tik op de link die verschijnt. De lampmodus opent in Safari.</li>
+                <li>Tik op <strong>Camera starten</strong> en leg de telefoon op de lamp.</li>
+              </ol>
+              <p class="muted small">iPhone en computer moeten op hetzelfde wifi-netwerk zitten.</p>
+              <p class="muted small" id="pair-err"></p>
+            </div>
+          </div>
+          <figure class="live" id="live-wrap" hidden>
+            <img id="live" alt="Live beeld van de iPhone">
+          </figure>
+          <div class="desk-bar">
+            <span class="pill" id="link-state">niet gekoppeld</span>
+            <span class="pill" id="cam-state" hidden></span>
+            <span class="spacer"></span>
+            <button class="btn btn-quiet" data-act="auto" id="auto" disabled>Auto aan</button>
+            <button class="btn btn-primary" data-act="shoot" id="shoot" disabled>Opnemen <kbd>spatie</kbd></button>
+          </div>
+          <p class="muted small">Blader om en houd stil: de iPhone neemt vanzelf op. Of druk op de spatiebalk.</p>
+        </div>
+
+        <aside class="desk-side">
+          <div class="block-head">
+            <h2>Opnames <span class="muted" id="inbox-n"></span></h2>
+          </div>
+          <p class="muted small">Volgende pagina: p. <span id="next-p">${book.nextPage}</span>. Elke opname van een open boek wordt twee pagina's.</p>
+          <ul class="inbox" id="inbox"></ul>
+          <button class="btn btn-primary btn-block" data-act="review" id="review" disabled>Nakijken en opslaan</button>
+        </aside>
+      </div>
+    </section>
+  `);
+
+  let alive = true;
+  let liveUrl = null;
+  const urls = [];
+  const linkState = $('#link-state'), camState = $('#cam-state');
+
+  const setLinked = (on) => {
+    linkState.textContent = on ? 'iPhone gekoppeld' : 'niet gekoppeld';
+    linkState.className = 'pill ' + (on ? 'pill-ok' : '');
+    $('#shoot').disabled = !on;
+    $('#auto').disabled = !on;
+    if (!on) { $('#live-wrap').hidden = true; $('#pair').hidden = false; camState.hidden = true; }
+  };
+  const setAuto = (on) => {
+    const b = $('#auto');
+    b.dataset.on = on ? '1' : '';
+    b.textContent = on ? 'Auto aan' : 'Auto uit';
+    b.classList.toggle('btn-on', on);
+  };
+
+  const d = ensureDesk(id);
+  const link = d.link;
+  d.ui = {
+    ready(code) {
+      if (!alive) return;
+      const url = new URL('lamp.html', location.href);
+      url.search = location.search;   // testinstellingen meenemen
+      url.hash = 'koppel=' + code;
+      const qr = qrcode(0, 'M');
+      qr.addData(url.href);
+      qr.make();
+      $('#qr').innerHTML = qr.createSvgTag({ cellSize: 5, margin: 2, scalable: true }) + `<a class="muted small qr-link" href="${esc(url.href)}" target="_blank" rel="noopener">link</a>`;
+      $('#pair-err').textContent = '';
+    },
+    open() { setLinked(true); toast('iPhone gekoppeld'); },
+    close() {
+      setLinked(false);
+      $('#pair-err').textContent = 'Verbinding weg. De iPhone probeert het vanzelf opnieuw; scan anders de code nog eens.';
+    },
+    error(text) { $('#pair-err').textContent = text; },
+    async shot() { flash(); await drawInbox(); work(); },
+    message(m) {
+      if (m.t === 'hello') { setAuto(!!m.auto); return; }
+      if (m.t === 'preview') {
+        if (m.img) {
+          const u = URL.createObjectURL(toBlob(m.img));
+          $('#live').src = u;
+          if (liveUrl) URL.revokeObjectURL(liveUrl);
+          liveUrl = u;
+        }
+        $('#pair').hidden = true;
+        $('#live-wrap').hidden = false;
+        camState.hidden = !m.state;
+        camState.textContent = m.state || '';
+        if (typeof m.auto === 'boolean') setAuto(m.auto);
+      }
+    },
+  };
+  if (d.code) d.ui.ready(d.code);
+  if (link.connected) setLinked(true);
+
+  function flash() {
+    const w = $('#live-wrap');
+    w.classList.remove('flash'); void w.offsetWidth; w.classList.add('flash');
+  }
+
+  async function drawInbox() {
+    if (!alive) return;
+    const items = await inboxOf(id);
+    const b = await db.get('books', id);
+    $('#next-p').textContent = b ? b.nextPage : '';
+    $('#inbox-n').textContent = items.length ? `(${items.length})` : '';
+    $('#review').disabled = !items.length;
+    urls.splice(0).forEach(u => URL.revokeObjectURL(u));
+    $('#inbox').innerHTML = items.length ? items.map((s, i) => {
+      const u = URL.createObjectURL(s.image); urls.push(u);
+      const st = s.status === 'done' ? `klaar · ${s.confidence ?? '?'}% zeker`
+        : s.status === 'busy' ? `herkennen… <span data-prog="${s.id}"></span>`
+        : s.status === 'error' ? 'herkennen mislukt' : 'wacht';
+      return `<li class="inbox-row">
+        <img src="${u}" alt="Opname ${i + 1}">
+        <span class="inbox-txt"><strong>${i + 1}</strong> <span class="muted small">${st}</span></span>
+        <button class="icon-btn" data-act="del-shot" data-id="${s.id}" aria-label="Opname weggooien">${icon('trash')}</button>
+      </li>`;
+    }).join('') : '<li class="muted small">Nog geen opnames. Ze verschijnen hier zodra de iPhone een pagina opneemt.</li>';
+  }
+
+  /** Herkent de opnames één voor één op de achtergrond, zodat nakijken daarna direct kan. */
+  let working = false;
+  async function work() {
+    if (working) return;
+    working = true;
+    try {
+      while (alive) {
+        const s = (await inboxOf(id)).find(x => x.status === 'new' || x.status === 'busy');
+        if (!s) break;
+        s.status = 'busy';
+        await shots.put(s);
+        await drawInbox();
+        let res = null;
+        const job = ocr.recognize(s.image, book.lang, (m) => {
+          const el = document.querySelector(`[data-prog="${s.id}"]`);
+          if (el && m.status === 'recognizing text') el.textContent = Math.round(m.progress * 100) + '%';
+        });
+        deskJob = job.catch(() => {});
+        try { res = await job; } catch (err) { console.error(err); }
+        const cur = await shots.get(s.id);
+        if (!cur) continue;   // intussen weggegooid of al in het nakijkscherm
+        if (res) {
+          Object.assign(cur, {
+            status: 'done', confidence: res.confidence, rotated: res.image || null,
+            text: res.pages && res.pages.length === 2 ? res.pages[0].text : res.text,
+            text2: res.pages && res.pages.length === 2 ? res.pages[1].text : null,
+          });
+        } else cur.status = 'error';
+        await shots.put(cur);
+        await drawInbox();
+      }
+    } finally { working = false; }
+  }
+
+  const onKey = (e) => {
+    if (e.target.closest('input, textarea')) return;
+    if (e.code === 'Space') { e.preventDefault(); if (link.connected) link.send({ t: 'capture' }); }
+  };
+  const onClick = async (e) => {
+    const el = e.target.closest('[data-act]');
+    if (!el) return;
+    const act = el.dataset.act;
+    if (act === 'shoot') return link.send({ t: 'capture' });
+    if (act === 'auto') { const on = !el.dataset.on; setAuto(on); return link.send({ t: 'auto', on }); }
+    if (act === 'del-shot') { await shots.del(+el.dataset.id); return drawInbox(); }
+    if (act === 'review') {
+      if (await db.get('drafts', id)) return go(`#/boek/${id}/scan`);
+      if (await takeFromInbox(id)) go(`#/boek/${id}/scan`);
+    }
+  };
+  document.addEventListener('keydown', onKey);
+  app.addEventListener('click', onClick);
+  cleanup = () => {
+    alive = false;
+    d.ui = null;   // de verbinding blijft open, zodat opnames binnenkomen terwijl je nakijkt
+    document.removeEventListener('keydown', onKey);
+    app.removeEventListener('click', onClick);
+    if (liveUrl) URL.revokeObjectURL(liveUrl);
+    urls.forEach(u => URL.revokeObjectURL(u));
+  };
+
+  await drawInbox();
+  work();
 }
 
 /** Bekijken / bewerken van een opgeslagen pagina. */
