@@ -1,6 +1,7 @@
 // Draait de tekstherkenning op de testfoto's in tests/fixtures in Chromium (Playwright).
 // Gebruik: node tests/run-ocr-tests.mjs [naam ...]   (vanuit de hoofdmap van de repo)
-// Schrijft de herkende tekst naar tests/out/<naam>.md en de voorbewerkte foto naar tests/out/<naam>.jpg.
+// Schrijft de herkende tekst naar tests/out/<naam>.md en de voorbewerkte foto naar tests/out/<naam>.jpg
+// (bij een open boek met twee pagina's: <naam>-1.jpg en <naam>-2.jpg).
 import { createServer } from 'node:http';
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
@@ -40,7 +41,9 @@ for (const name of names) {
   const res = await page.evaluate(([u]) => window.runOcr(u), [`/tests/fixtures/${file}`]);
   const prep = await page.evaluate(([u]) => window.prepared(u), [`/tests/fixtures/${file}`]);
   await writeFile(join(root, `tests/out/${name}.md`), res.text + '\n');
-  await writeFile(join(root, `tests/out/${name}.jpg`), Buffer.from(prep.split(',')[1], 'base64'));
+  for (let i = 0; i < prep.length; i++) {
+    await writeFile(join(root, `tests/out/${name}${prep.length > 1 ? '-' + (i + 1) : ''}.jpg`), Buffer.from(prep[i].split(',')[1], 'base64'));
+  }
   const exp = expected[name] || {};
   const got = new Set(words(res.text));
   const want = words(exp.words || '');

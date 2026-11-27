@@ -3,6 +3,7 @@
 import {
   grayFromCanvas, canvasFromGray, findPage, warpPage, normalizeLight, estimateSkew, rotate,
   dewarp, removeRules, clearBorders, cropSides, findDropCaps, cropForOcr, whiteOut,
+  findGutter, cropX, turn,
 } from './scan.js';
 
 /* ---------- Tekst opbouwen ---------- */
@@ -221,23 +222,47 @@ export async function resizeToBlob(blob, maxSide, quality = 0.85, rotate = 0) {
   return new Promise(r => c.toBlob(r, 'image/jpeg', quality));
 }
 
-/** Maakt de foto klaar voor herkenning: pagina rechtzetten, belichting, scheefstand, kromming,
-    kaderlijnen en grote beginletters. Geeft het canvas terug plus wat er gedaan is. */
-export async function prepareForOcr(blob) {
+async function grayOf(blob) {
   const im = await loadImage(blob);
   const scale = Math.min(1, 2200 / Math.max(im.naturalWidth, im.naturalHeight));
   const c = document.createElement('canvas');
   c.width = Math.round(im.naturalWidth * scale); c.height = Math.round(im.naturalHeight * scale);
   c.getContext('2d', { willReadFrequently: true }).drawImage(im, 0, 0, c.width, c.height);
-  let img = grayFromCanvas(c);
+  return grayFromCanvas(c);
+}
+
+/** Maakt de foto klaar voor herkenning: pagina rechtzetten, belichting, scheefstand, kromming,
+    kaderlijnen en grote beginletters. Staan er twee pagina's op (open boek), dan wordt de foto
+    bij de rug in tweeën geknipt. Geeft { pages: [...], steps, canvas } terug. */
+export async function prepareForOcr(blob) {
+  let img = await grayOf(blob);
   const steps = [];
   const quad = findPage(img);
   if (quad) { img = warpPage(img, quad); steps.push('pagina'); }
-  const photo = img;
+  let photo = img;
   img = normalizeLight(img);
+  // Twee pagina's? Eerst het geheel rechtzetten, dan de rug zoeken.
+  let halves = [[img, photo]];
+  if (img.W > img.H * 1.1) {
+    const a = estimateSkew(img);
+    const straight = Math.abs(a) >= 0.3 ? rotate(img, a) : img;
+    const gx = findGutter(straight);
+    if (gx) {
+      const sp = Math.abs(a) >= 0.3 ? rotate(photo, a) : photo;
+      halves = [[cropX(straight, 0, gx), cropX(sp, 0, gx)], [cropX(straight, gx, straight.W), cropX(sp, gx, sp.W)]];
+      steps.push("twee pagina's");
+    }
+  }
+  const pages = halves.map(([g, p]) => preparePage(g, p, steps, halves.length > 1));
+  return { pages, steps, canvas: pages[0].canvas };
+}
+
+function preparePage(img, photo, steps, half = false) {
   const cs = cropSides(img);
   if (cs.cropped) { img = cs.img; steps.push('buurpagina weg'); }
-  const angle = estimateSkew(img);
+  let angle = estimateSkew(img);
+  // Bij een open boek is het geheel al rechtgezet; een grote hoek per pagina is dan ruis (rand, tafel).
+  if (half && Math.abs(angle) > 6) angle = 0;
   if (Math.abs(angle) >= 0.3) { img = rotate(img, angle); steps.push(`scheef ${angle.toFixed(1)}°`); }
   const dw = dewarp(img);
   if (dw.warped) { img = dw.img; steps.push(`krom ${Math.round(dw.maxOff)}px`); }
@@ -254,7 +279,7 @@ export async function prepareForOcr(blob) {
     clearBorders(inv);
     return canvasFromGray(inv);
   };
-  return { canvas: canvasFromGray(img), dropCaps, crops, steps, inverted };
+  return { canvas: canvasFromGray(img), dropCaps, crops, inverted };
 }
 
 /* ---------- Tekstherkenning (Tesseract.js, lokaal) ---------- */
@@ -284,6 +309,17 @@ function score(blocks) {
   return s;
 }
 
+/** Strenger: alleen gewone woorden in kleine letters met een klinker (onzin uit een gedraaide foto valt weg). */
+function wordScore(blocks) {
+  let s = 0;
+  for (const b of blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || [])
+    for (const w of l.words || []) {
+      const t = w.text.replace(/^[‘’'"“”(\[]+|[‘’'"“”)\].,;:!?]+$/g, '');
+      if (w.confidence >= 75 && /^\p{Ll}{3,}$/u.test(t) && /[aeiouyáéëïóöü]/.test(t)) s += t.length;
+    }
+  return s;
+}
+
 export const ocr = {
   worker: null,
   lang: null,
@@ -304,16 +340,59 @@ export const ocr = {
         gzip: true,
         logger: (m) => this.onProgress && this.onProgress(m),
       });
-      await w.setParameters({ preserve_interword_spaces: '0' });
+      // Geen staande tekst zoeken: anders leest Tesseract een gedraaide foto soms half, en kiezen we de verkeerde richting.
+      await w.setParameters({ preserve_interword_spaces: '0', textord_tabfind_vertical_text: '0' });
       this.worker = w;
       this.lang = lang;
       return w;
     })();
     try { return await this.ready; } finally { this.ready = null; }
   },
+  /** Welke kant is boven? Leest een stuk uit het midden van de foto in vier richtingen
+      (eerst gewoon; de rest alleen als dat weinig oplevert). Geeft 0, 90, 180 of 270 terug. */
+  async orientation(blob, lang) {
+    const w = await this.get(lang);
+    const img = normalizeLight(await grayOf(blob));
+    // Eén tekstblok (modus 6): de automatische opmaakherkenning leest gedraaide regels soms toch, en dan kiezen we fout.
+    await w.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: '' });
+    const tries = [];
+    for (const deg of [0, 90, 270, 180]) {
+      // Draaien, scheefstand eruit, dan een vierkant uit het midden lezen.
+      let t = turn(img, deg);
+      const a = estimateSkew(t);
+      if (Math.abs(a) >= 0.3) t = rotate(t, a);
+      const side = Math.round(Math.min(t.W, t.H) * 0.7);
+      const x0 = Math.round((t.W - side) / 2), y0 = Math.round((t.H - side) / 2);
+      const sq = cropX({ g: t.g.subarray(y0 * t.W, (y0 + side) * t.W), W: t.W, H: side }, x0, x0 + side);
+      const { data } = await w.recognize(canvasFromGray(sq), {}, { text: true, blocks: true });
+      tries.push({ deg, s: wordScore(data.blocks), c: data.confidence });
+      if (deg === 0 && tries[0].s > 150) break;
+    }
+    await w.setParameters({ tessedit_pageseg_mode: '3' });
+    console.debug('[ocr] richting', tries.map(t => `${t.deg}:${Math.round(t.s)}/${Math.round(t.c)}`).join(' '));
+    tries.sort((a, b) => b.s - a.s);
+    const base = tries.find(t => t.deg === 0)?.s ?? 0;
+    return tries[0].s >= 20 && tries[0].s > base * 1.3 ? tries[0].deg : 0;
+  },
   async recognize(blob, lang, onProgress) {
     const w = await this.get(lang);
+    const deg = await this.orientation(blob, lang);
+    let image = null;
+    if (deg) { image = await resizeToBlob(blob, 2200, 0.92, deg); blob = image; }
     const prep = await prepareForOcr(blob);
+    if (deg) prep.steps.unshift(`gedraaid ${deg}°`);
+    const pages = [];
+    for (let i = 0; i < prep.pages.length; i++) {
+      pages.push(await this.recognizePage(w, prep.pages[i], prep.steps, onProgress && ((m) => {
+        onProgress(m.status === 'recognizing text' ? { ...m, progress: (i + m.progress) / prep.pages.length } : m);
+      })));
+    }
+    const text = pages.map(p => p.text).join('\n\n');
+    const confidence = Math.round(pages.reduce((s, p) => s + p.confidence, 0) / pages.length);
+    console.debug('[ocr]', prep.steps.join(', ') || 'geen voorbewerking', `${confidence}%`);
+    return { text, confidence, steps: prep.steps, pages, image, rotated: deg };
+  },
+  async recognizePage(w, prep, steps, onProgress) {
     // Grote beginletters los herkennen, als één hoofdletter.
     for (let i = 0; i < prep.dropCaps.length; i++) {
       await w.setParameters({ tessedit_pageseg_mode: '10', tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÄÉÈÊËÍÏÓÖÔÚÜ' });
@@ -329,7 +408,7 @@ export const ocr = {
     let confidence = data.confidence;
     // Weinig of onzekere tekst (omslag, kaders, tekst rond een plaatje)? Probeer losse-tekstmodus,
     // zowel op de gewone als op de omgekeerde versie (lichte letters op een donkere ondergrond).
-    if (data.blocks && (confidence < 75 || text.split(/\s+/).length < 40)) {
+    if (data.blocks && (confidence < 65 || text.split(/\s+/).length < 40)) {
       await w.setParameters({ tessedit_pageseg_mode: '11' });
       const a = (await w.recognize(prep.canvas, {}, { text: true, blocks: true })).data;
       const b = (await w.recognize(prep.inverted(), {}, { text: true, blocks: true })).data;
@@ -338,10 +417,9 @@ export const ocr = {
       if (score(blocks) > score(data.blocks) * 1.15) {
         text = buildText(blocks, { dropCaps: prep.dropCaps, sparse: true });
         confidence = Math.max(a.confidence, b.confidence);
-        prep.steps.push('losse tekst');
+        if (!steps.includes('losse tekst')) steps.push('losse tekst');
       }
     }
-    console.debug('[ocr]', prep.steps.join(', ') || 'geen voorbewerking', `${Math.round(confidence)}%`);
-    return { text, confidence: Math.round(confidence), steps: prep.steps };
+    return { text, confidence: Math.round(confidence) };
   },
 };

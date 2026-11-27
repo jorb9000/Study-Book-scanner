@@ -548,9 +548,15 @@ async function viewReview(id) {
       </div>
 
       <label class="text-wrap" id="text-wrap" hidden>
+        <span class="page-label" id="pl1" hidden></span>
         <span class="sr-only">Herkende tekst</span>
         <textarea id="text" spellcheck="true" lang="${book.lang === 'eng' ? 'en' : 'nl'}"></textarea>
       </label>
+      <label class="text-wrap" id="text-wrap2" hidden>
+        <span class="page-label" id="pl2"></span>
+        <textarea id="text2" spellcheck="true" lang="${book.lang === 'eng' ? 'en' : 'nl'}"></textarea>
+      </label>
+      <button class="chip" data-act="unsplit" id="unsplit" hidden>Toch één pagina</button>
       <p class="muted small" id="conf"></p>
     </section>
 
@@ -561,21 +567,45 @@ async function viewReview(id) {
   `);
 
   const ta = $('#text');
+  const ta2 = $('#text2');
   const status = $('#status');
+  // Open boek op de foto: de tekst staat in twee vakken en wordt als twee pagina's opgeslagen.
+  const isSpread = () => draft.text2 != null;
+  const pageLabels = () => {
+    $('#pl1').textContent = `Pagina ${draft.pageNumber}`;
+    $('#pl2').textContent = `Pagina ${draft.pageNumber + 1}`;
+  };
   const setButtons = (on) => app.querySelectorAll('[data-act="save"], [data-act="save-next"]').forEach(b => (b.disabled = !on));
 
   const showText = (t) => {
     $('#text-wrap').hidden = false;
     ta.value = t;
+    const two = isSpread();
+    $('#pl1').hidden = !two;
+    $('#text-wrap2').hidden = !two;
+    $('#unsplit').hidden = !two;
+    if (two) { ta2.value = draft.text2; pageLabels(); }
     autosize();
     setButtons(true);
   };
-  const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.max(220, ta.scrollHeight + 2) + 'px'; };
+  const grow = (el) => { el.style.height = 'auto'; el.style.height = Math.max(220, el.scrollHeight + 2) + 'px'; };
+  const autosize = () => { grow(ta); if (isSpread()) grow(ta2); };
   ta.addEventListener('input', () => {
-    autosize();
+    grow(ta);
     clearTimeout(ta._t);
     ta._t = setTimeout(() => { draft.text = ta.value; db.put('drafts', draft); }, 400);
   });
+  ta2.addEventListener('input', () => {
+    grow(ta2);
+    clearTimeout(ta2._t);
+    ta2._t = setTimeout(() => { draft.text2 = ta2.value; db.put('drafts', draft); }, 400);
+  });
+  const useResult = (r) => {
+    if (r.image) { draft.image = r.image; $('#photo img').src = URL.createObjectURL(r.image); }
+    if (r.pages && r.pages.length === 2) { draft.text = r.pages[0].text; draft.text2 = r.pages[1].text; }
+    else { draft.text = r.text; draft.text2 = null; }
+    draft.confidence = r.confidence;
+  };
 
   async function runOcr(auto = true) {
     setButtons(false);
@@ -594,6 +624,7 @@ async function viewReview(id) {
         }
       });
       if (!alive) return;
+      if (res.image) { draft.image = res.image; $('#photo img').src = URL.createObjectURL(res.image); }
       let best = res;
       // Zeer lage zekerheid? Waarschijnlijk ligt de foto gedraaid: probeer zelf de andere richtingen.
       if (res.confidence < 45 && auto) {
@@ -605,12 +636,15 @@ async function viewReview(id) {
             if (alive && m.status === 'recognizing text') bar.style.width = Math.round(m.progress * 100) + '%';
           });
           if (!alive) return;
-          if (r.confidence > best.confidence + 10) { best = r; draft.image = img; $('#photo img').src = URL.createObjectURL(img); }
+          if (r.confidence > best.confidence + 10) {
+            best = r;
+            draft.image = r.image || img;
+            $('#photo img').src = URL.createObjectURL(draft.image);
+          }
           if (best.confidence >= 75) break;
         }
       }
-      draft.text = best.text;
-      draft.confidence = best.confidence;
+      useResult({ ...best, image: null });
       await db.put('drafts', draft);
       status.hidden = true;
       showText(draft.text);
@@ -638,23 +672,30 @@ async function viewReview(id) {
     draft.pageNumber = Math.max(1, n);
     $('#pn').textContent = `p. ${draft.pageNumber}`;
     $('#chap').textContent = chapterFor(book, draft.pageNumber)?.title || '';
+    if (isSpread()) pageLabels();
     await db.put('drafts', draft);
   };
 
   async function save() {
     draft.text = ta.value;
-    const id_ = pageId(id, draft.pageNumber);
-    const existing = await db.get('pages', id_);
+    const texts = [draft.text];
+    if (isSpread()) { draft.text2 = ta2.value; texts.push(draft.text2); }
     const thumb = await resizeToBlob(draft.image, 1100, 0.72);
-    await db.put('pages', {
-      id: id_, bookId: id, pageNumber: draft.pageNumber,
-      text: draft.text.trim(), confidence: draft.confidence ?? null,
-      image: thumb, savedAt: Date.now(), createdAt: existing?.createdAt || Date.now(),
-    });
+    let existing = null;
+    for (let i = 0; i < texts.length; i++) {
+      const n = draft.pageNumber + i, id_ = pageId(id, n);
+      const old = await db.get('pages', id_);
+      existing = existing || old;
+      await db.put('pages', {
+        id: id_, bookId: id, pageNumber: n,
+        text: texts[i].trim(), confidence: draft.confidence ?? null,
+        image: thumb, savedAt: Date.now(), createdAt: old?.createdAt || Date.now(),
+      });
+    }
     await db.del('drafts', id);
     const pages = await db.pagesOf(id);
     const set = new Set(pages.map(p => p.pageNumber));
-    book.nextPage = nextUnscanned(draft.pageNumber + 1, set, book);
+    book.nextPage = nextUnscanned(draft.pageNumber + texts.length, set, book);
     book.updatedAt = Date.now();
     await db.put('books', book);
     return existing;
@@ -666,9 +707,15 @@ async function viewReview(id) {
     const act = el.dataset.act;
     if (act === 'pn-inc') return setPn(draft.pageNumber + 1);
     if (act === 'pn-dec') return setPn(draft.pageNumber - 1);
+    if (act === 'unsplit') {
+      draft.text = [ta.value, ta2.value].filter(t => t.trim()).join('\n\n');
+      draft.text2 = null;
+      await db.put('drafts', draft);
+      return showText(draft.text);
+    }
     if (act === 'rotate') {
       draft.image = await resizeToBlob(draft.image, 2200, 0.9, 90);
-      draft.text = null;
+      draft.text = null; draft.text2 = null;
       await db.put('drafts', draft);
       $('#photo img').src = URL.createObjectURL(draft.image);
       return runOcr(false);
@@ -686,8 +733,10 @@ async function viewReview(id) {
     }
     if (act === 'save' || act === 'save-next') {
       let next = act === 'save-next';
-      if (scanned.has(draft.pageNumber)) {
-        if (!await confirmSheet(`Pagina ${draft.pageNumber} bestaat al`, 'De eerder opgeslagen tekst wordt vervangen.', 'Vervangen')) return;
+      const taken = [draft.pageNumber, ...(isSpread() ? [draft.pageNumber + 1] : [])].filter(n => scanned.has(n));
+      if (taken.length) {
+        const title = taken.length > 1 ? `Pagina ${taken[0]} en ${taken[1]} bestaan al` : `Pagina ${taken[0]} bestaat al`;
+        if (!await confirmSheet(title, 'De eerder opgeslagen tekst wordt vervangen.', 'Vervangen')) return;
         next = false; // na een vraag mag iOS de camera niet meer openen; terug naar het boek
       }
       setButtons(false);
@@ -700,7 +749,7 @@ async function viewReview(id) {
         if (alive) route();
       } else {
         await save();
-        toast(`Pagina ${draft.pageNumber} opgeslagen`);
+        toast(isSpread() ? `Pagina ${draft.pageNumber} en ${draft.pageNumber + 1} opgeslagen` : `Pagina ${draft.pageNumber} opgeslagen`);
         go(`#/boek/${id}`, true);
       }
     }

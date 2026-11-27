@@ -1,5 +1,5 @@
 /* Offline: app-bestanden vooraf, tekstherkenning bij eerste gebruik. */
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL = `boekscanner-shell-${VERSION}`;
 const OCR = 'boekscanner-ocr-v1';
 const FILES = [
