@@ -317,7 +317,7 @@ input::placeholder { color: var(--muted); }
 .qr { width: 220px; display: grid; gap: 4px; justify-items: center; }
 .qr svg { width: 220px; height: 220px; background: #fff; border-radius: 8px; }
 .qr-link { font-size: 12px; }
-.live { margin: 0; border-radius: var(--radius); overflow: hidden; background: #000; }
+.live { position: relative; margin: 0; border-radius: var(--radius); overflow: hidden; background: #000; }
 .live canvas { display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain; }
 .live.flash { animation: deskflash .5s ease-out; }
 @keyframes deskflash { from { box-shadow: 0 0 0 6px var(--accent); } to { box-shadow: 0 0 0 0 transparent; } }
@@ -344,3 +344,12 @@ kbd { font: 12px var(--sans); padding: 1px 5px; border-radius: 4px; background: 
 .pair[hidden], .live[hidden], .pill[hidden] { display: none; }
 /* Verborgen is verborgen, ook als een klasse een eigen display heeft (tekstvakken, chips). */
 [hidden] { display: none !important; }
+
+/* Melding op het live beeld na een opname */
+.live-badge { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); max-width: calc(100% - 32px);
+  padding: 10px 18px; border-radius: 99px; font: 600 18px/1.3 var(--sans, system-ui); color: #fff;
+  background: rgba(20, 20, 20, .72); box-shadow: 0 4px 18px rgba(0, 0, 0, .35); pointer-events: none; text-align: center;
+  animation: badgein .25s ease-out; }
+.live-badge-ok { background: rgba(31, 122, 64, .92); }
+.live-badge-same { background: rgba(40, 40, 40, .8); }
+@keyframes badgein { from { opacity: 0; transform: translate(-50%, -6px); } }

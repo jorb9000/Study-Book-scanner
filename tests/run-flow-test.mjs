@@ -72,15 +72,20 @@ try {
   while (await rows() < 2 && Date.now() - t0 < 25000) await desk.waitForTimeout(500);
   await desk.keyboard.press('KeyA');   // auto uit: het nepbeeld begint steeds opnieuw
   check(await rows() >= 2, `automatisch opgenomen (${await rows()} opnames)`);
+  const badge = await desk.locator('#live-badge').innerText().catch(() => '');
+  check(/Opgenomen · p\. 1\d–1\d/.test(badge), `melding op het live beeld (${badge})`);
+  check(/2 opnames · laatste p\. 12–13/.test(await desk.locator('#shot-count').innerText()), 'teller bij het live beeld');
+  check((await desk.locator('.inbox-txt strong').first().innerText()) === '2', 'nieuwste opname bovenaan');
+  await desk.screenshot({ path: join(out, 'flow-opnames.png') });
 
   // Klikken op de tweede opname terwijl de eerste nog herkend wordt.
   const t1 = Date.now();
-  await desk.click('[data-act=open-shot] >> nth=1');
+  await desk.click('[aria-label="Opname 2 nakijken"]');
   await desk.waitForSelector('.view-review');
   check(Date.now() - t1 < 1000, `opname openen tijdens herkenning (${Date.now() - t1} ms)`);
   check(await desk.locator('#pn').innerText() === 'p. 12', 'tweede opname is p. 12');
   await desk.click('a.back');
-  await desk.click('[data-act=open-shot] >> nth=0');
+  await desk.click('[aria-label="Opname 1 nakijken"]');
   await desk.waitForSelector('.view-review');
   check(await desk.locator('#pn').innerText() === 'p. 10', 'gewisseld naar eerste opname, p. 10');
   check(!await desk.locator('#text-wrap').isVisible(), 'geen leeg tekstvak tijdens herkennen');
