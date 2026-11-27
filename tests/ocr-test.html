@@ -4,7 +4,7 @@
 <p>Testpagina voor de tekstherkenning. Wordt gebruikt door <code>tests/run-ocr-tests.mjs</code>.</p>
 <script src="../vendor/tesseract/tesseract.min.js"></script>
 <script type="module">
-  import { ocr, prepareForOcr } from '../ocr.js';
+  import { ocr, prepareForOcr, resizeToBlob } from '../ocr.js';
   window.runOcr = async (url, lang = 'nld') => {
     const blob = await (await fetch(url)).blob();
     const t = performance.now();
@@ -15,8 +15,10 @@
   };
   window.prepared = async (url) => {
     const blob = await (await fetch(url)).blob();
-    const c = await prepareForOcr(blob);
-    return (c.canvas || c).toDataURL('image/jpeg', 0.85);
+    // Zelfde richting als de herkenning kiest, dan per pagina het voorbewerkte beeld.
+    const deg = await ocr.orientation(blob, 'nld');
+    const c = await prepareForOcr(deg ? await resizeToBlob(blob, 2200, 0.92, deg) : blob);
+    return c.pages.map(p => p.canvas.toDataURL('image/jpeg', 0.85));
   };
   // Toont de gevolgde regels (rood = gevonden, blauw = geschat) op de foto vóór het rechttrekken.
   window.tracks = async (url) => {

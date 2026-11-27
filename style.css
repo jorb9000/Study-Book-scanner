@@ -217,6 +217,9 @@ button.list-main { flex-direction: column; gap: 2px; align-items: flex-start; }
 .ocr-status .bar { margin: 0 0 10px; }
 
 .text-wrap { display: block; }
+.text-wrap + .text-wrap { margin-top: 16px; }
+.page-label { display: block; font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); margin: 0 2px 8px; }
+#unsplit { margin-top: 12px; background: var(--line); color: var(--ink); backdrop-filter: none; -webkit-backdrop-filter: none; }
 textarea {
   display: block; width: 100%; min-height: 220px; resize: none;
   background: var(--card); color: var(--ink);

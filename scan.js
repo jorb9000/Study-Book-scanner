@@ -236,6 +236,71 @@ export function cropSides(img) {
   return { img: { g: out, W: img.W, H: img.H }, cropped: true };
 }
 
+/* ---------- 2b. Twee pagina's tegelijk (open boek) en kwartslagen ---------- */
+
+/** Zoekt de rug tussen twee pagina's (een liggende foto van een open boek).
+    Geeft de x van de rug terug, of null als er maar één pagina op staat. */
+export function findGutter(img) {
+  const { W: W0, H: H0 } = img;
+  if (W0 < H0 * 1.1) return null;
+  const f = 4;
+  const { g, W, H } = shrink(img, f);
+  // Lange staande lijnen (vouw, schaduw van de rug, paginarand) tellen niet als tekst.
+  const col = new Float64Array(W);
+  const maxRun = H * 0.08;
+  for (let x = 0; x < W; x++) {
+    let y = 0;
+    while (y < H) {
+      if (g[y * W + x] >= 140) { y++; continue; }
+      let e = y; while (e < H && g[e * W + x] < 140) e++;
+      if (e - y < maxRun) col[x] += e - y;
+      y = e;
+    }
+  }
+  const r = Math.max(1, Math.round(W * 0.004));
+  const sm = col.map((_, x) => { let v = 0, n = 0; for (let d = -r; d <= r; d++) if (x + d >= 0 && x + d < W) { v += col[x + d]; n++; } return v / n; });
+  const inked = Array.from(sm).filter(v => v > 0).sort((p, q) => p - q);
+  if (!inked.length) return null;
+  const typical = inked[Math.floor(inked.length * 0.75)];
+  const low = typical * 0.06;
+  // Langste leeg stuk in het middengebied.
+  let best = null, start = -1;
+  const a = Math.round(W * 0.25), b = Math.round(W * 0.75);
+  for (let x = a; x <= b; x++) {
+    const empty = x < b && sm[x] <= low;
+    if (empty) { if (start < 0) start = x; }
+    else if (start >= 0) { if (!best || x - start > best[1] - best[0]) best = [start, x]; start = -1; }
+  }
+  if (!best || best[1] - best[0] < W * 0.012) return null;
+  const mid = (best[0] + best[1]) / 2;
+  let left = 0, right = 0;
+  for (let x = 0; x < W; x++) (x < mid ? (left += col[x]) : (right += col[x]));
+  if (Math.min(left, right) < (left + right) * 0.15) return null;
+  return Math.round(mid * f);
+}
+
+/** Knipt een stuk [x0, x1) uit een grijsbeeld. */
+export function cropX({ g, W, H }, x0, x1) {
+  const w = x1 - x0, out = new Uint8ClampedArray(w * H);
+  for (let y = 0; y < H; y++) out.set(g.subarray(y * W + x0, y * W + x1), y * w);
+  return { g: out, W: w, H };
+}
+
+/** Draait een grijsbeeld een kwartslag (90 = met de klok mee) of 180 graden. */
+export function turn({ g, W, H }, deg) {
+  deg = ((deg % 360) + 360) % 360;
+  if (!deg) return { g, W, H };
+  const swap = deg !== 180, w = swap ? H : W, h = swap ? W : H;
+  const out = new Uint8ClampedArray(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const v = g[y * W + x];
+    if (deg === 90) out[x * w + (H - 1 - y)] = v;
+    else if (deg === 270) out[(W - 1 - x) * w + y] = v;
+    else out[(H - 1 - y) * W + (W - 1 - x)] = v;
+  }
+  return { g: out, W: w, H: h };
+}
+
 /* ---------- 3. Scheefstand ---------- */
 
 /** Hoek (graden) waarbij de regels het scherpst horizontaal liggen. */
