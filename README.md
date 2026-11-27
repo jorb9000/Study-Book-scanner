@@ -1,53 +1,43 @@
 # Boekscanner
 
-Een eenvoudige iPhone-app (web-app) om studieboeken in delen te scannen. De app houdt per boek bij welke pagina's klaar zijn, welke ontbreken en waar je verder moet. De tekst exporteer je als Markdown.
+Een eenvoudige web-app om studieboeken in delen te scannen. Je bedient alles op je computer; de iPhone ligt op een bureaulamp boven het boek en is alleen de camera. De app houdt per boek bij welke pagina's klaar zijn, welke ontbreken en waar je verder moet. De tekst exporteer je als Markdown.
 
-- Werkt zonder account en zonder server. Alles blijft op je telefoon.
-- Tekstherkenning gebeurt op de telefoon zelf (Nederlands en/of Engels), ook offline.
-- Geen installatie via de App Store nodig.
+- Werkt zonder account. Boeken en teksten blijven op je computer.
+- Tekstherkenning gebeurt op de computer zelf (Nederlands en/of Engels), ook offline.
+- Geen installatie nodig: open de link in Safari of Chrome.
 
-## Op je iPhone zetten
+## Opstelling
 
-1. Open de link van de app in **Safari** (niet in Chrome).
-2. Tik op het **deelknopje** (vierkant met pijl omhoog).
-3. Kies **Zet op beginscherm** en tik op **Voeg toe**.
-4. Open Boekscanner voortaan via het icoon. De eerste keer vraagt iOS of de app de camera mag gebruiken.
-
-> Let op: de app op je beginscherm heeft zijn eigen opslag, los van Safari. Gebruik dus steeds het icoon.
+Zet de iPhone via MagSafe op een bureaulamp, **liggend**, met de lens vrij over de rand en recht boven het boek. Zet op de iPhone **Automatisch slot** op **Nooit** (Instellingen › Scherm en helderheid).
 
 ## Een boek scannen
 
-1. Tik op **Nieuw boek**. Vul de titel in, de eerste pagina en eventueel de laatste pagina, en kies de taal.
-2. Tik op **Scan pagina …**. Leg het boek plat, zorg voor goed licht en fotografeer **één pagina recht van boven**.
-3. De tekst wordt herkend. Controleer hem en verbeter waar nodig.
-4. Tik op **Opslaan & volgende**. De camera gaat meteen open voor de volgende pagina.
-5. Stoppen mag op elk moment. De volgende keer staat de knop al op de juiste pagina.
+1. Open de Boekscanner op je computer en klik op **Nieuw boek**. Vul de titel in, de eerste pagina en eventueel de laatste pagina, en kies de taal.
+2. Klik op **Scannen met de lamp**. Er verschijnt een QR-code.
+3. Richt de **Camera-app** van je iPhone op de QR-code en tik op de link. Tik daarna één keer op het scherm van de iPhone en leg hem op de lamp. Een volgende keer kun je de pagina gewoon weer openen: hij onthoudt de koppeling.
+4. Op de computer zie je het live beeld. Blader om en houd stil: de iPhone neemt vanzelf op. Of druk op de **spatiebalk**. Met **A** zet je automatisch opnemen aan of uit.
+5. Elke opname komt direct op de computer binnen en wordt op de achtergrond herkend. Met **Nakijken en opslaan** loop je ze één voor één door. Een opname van een open boek wordt twee pagina's.
+6. Stoppen mag op elk moment. De volgende keer staat het boek al op de juiste pagina.
+
+De iPhone laat alleen het camerabeeld en een statuslampje zien (groen: klaar, oranje: zoekt computer of beweging). Na een paar seconden wordt het scherm donker; tik erop om het weer te zien.
+
+iPhone en computer moeten op hetzelfde wifi-netwerk zitten. Alleen de kennismaking loopt via de gratis openbare PeerJS-server; de foto's gaan rechtstreeks van telefoon naar computer. Op een netwerk dat apparaten van elkaar afschermt (zoals eduroam) lukt dat niet: zet dan de hotspot van je iPhone aan en verbind de computer daarmee. Valt de verbinding weg, dan blijven opnames op de telefoon bewaard en worden ze verstuurd zodra de verbinding terug is.
 
 Handig om te weten:
 - **Volgende pagina** (− / +) zet je op een ander paginanummer, bijvoorbeeld als je pagina's met alleen plaatjes overslaat.
-- Bij **Nog niet gescand** zie je welke pagina's ontbreken. Tik erop om daar verder te gaan.
+- Bij **Nog niet gescand** zie je welke pagina's ontbreken. Klik erop om daar verder te gaan.
 - **Hoofdstukken** zijn optioneel: geef aan op welke pagina een hoofdstuk begint, dan kun je per hoofdstuk exporteren.
 - Ligt de foto gedraaid, dan probeert de app zelf de juiste richting. Lukt dat niet, gebruik dan **Draaien**.
-- Een iets schuine foto of een pagina die bij de rug opbolt is geen probleem: de app zoekt de pagina, zet hem recht en trekt kromme regels recht. Zorg wel dat de hele pagina in beeld is, met wat tafel eromheen.
-- Koppen, citaten en opsommingen worden herkend en als Markdown opgeslagen (`##`, `>`, `-`). Een grote beginletter (initiaal) wordt apart herkend en weer voor het woord gezet.
-- Een niet-opgeslagen scan blijft bewaard, ook als je de app sluit.
+- Koppen, citaten en opsommingen worden herkend en als Markdown opgeslagen (`##`, `>`, `-`).
 
-## Lampmodus (telefoon boven het boek)
+### Boeken die nog op de iPhone staan
 
-Voor een vaste opstelling, bijvoorbeeld met de telefoon via MagSafe op een bureaulamp boven het boek. Open **Lampmodus** onderaan het beginscherm (of `lamp.html`).
-
-1. Leg de telefoon **liggend** op de lamp, met de lens vrij over de rand. De dubbele pagina moet bijna de hele breedte van het beeld vullen.
-2. Zet **Automatisch slot** op **Nooit** (Instellingen › Scherm en helderheid). De app vraagt zelf ook om het scherm aan te houden.
-3. Tik op **Camera starten**. Linksboven staat de resolutie; groen betekent 4K.
-4. Blader om en houd stil. Na ongeveer een seconde stilstand volgt een piep en een flits: de opname is gemaakt. Een hand die stil op de rand ligt is geen probleem. Stilhouden zonder om te slaan geeft geen dubbele opname.
-5. Bij **Opnames** zie je alles terug. **Alles delen** stuurt de foto's via AirDrop naar je computer.
-
-Dit is fase 1 van de opstelling met bediening vanaf de computer. In een volgende stap komen de opnames rechtstreeks op de computer binnen.
+Heb je eerder op de iPhone zelf gescand? Open de app op de iPhone, tik op **Back-up maken** en zet die back-up op de computer terug met **Back-up terugzetten** (de ••• rechtsboven op het beginscherm).
 
 ## Exporteren en back-up
 
-- **Exporteren** (bij Pagina's): de hele tekst of één hoofdstuk als Markdown-bestand (`.md`). Via het deelmenu kun je het bewaren in Bestanden/iCloud Drive of openen in een notitie-app. **Kopiëren** zet de tekst op het klembord.
-- **Back-up** (de ••• rechtsboven op het beginscherm): sla af en toe een back-up op in iCloud Drive. Daarin staan alle teksten en de voortgang, zonder foto's. Met **Back-up terugzetten** haal je alles terug, ook op een nieuwe telefoon.
+- **Exporteren** (bij Pagina's): de hele tekst of één hoofdstuk als Markdown-bestand (`.md`). Het bestand komt in Downloads op je computer. **Kopiëren** zet de tekst op het klembord.
+- **Back-up** (de ••• rechtsboven op het beginscherm): sla af en toe een back-up op in iCloud Drive. Daarin staan alle teksten en de voortgang, zonder foto's. Met **Back-up terugzetten** haal je alles terug, ook op een andere computer.
 
 ## Publiceren op GitHub Pages
 
@@ -66,6 +56,8 @@ Gewone HTML, CSS en JavaScript, zonder build-stap.
 | `app.js` | Opslag (IndexedDB), schermen, scannen, export |
 | `scan.js` | Voorbewerking van de foto: pagina vinden, perspectief, scheefstand, kromme regels, kaderlijnen, grote beginletters |
 | `ocr.js` | Tekstherkenning en het opbouwen van de Markdown (alinea's, koppen, citaten, opsommingen) |
+| `koppel.js` | Koppeling iPhone ↔ computer (WebRTC via PeerJS) en opslag van opnames |
+| `lamp.html`, `lamp.js` | De camera op de iPhone: live beeld, automatisch opnemen bij stilstand |
 | `style.css` | Vormgeving (licht en donker) |
 | `sw.js` | Offline werken |
 | `vendor/` | Tesseract.js (tekstherkenning, Apache-2.0) met Nederlandse en Engelse taaldata |

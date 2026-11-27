@@ -293,3 +293,35 @@ input::placeholder { color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Bureau: iPhone op de lamp, bediening vanaf de computer ---------- */
+.view-desk { max-width: 1180px; }
+.desk { display: grid; gap: 20px; margin-top: 12px; }
+@media (min-width: 900px) { .desk { grid-template-columns: minmax(0, 1fr) 320px; align-items: start; } }
+.desk-main { display: grid; gap: 12px; }
+.pair { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; padding: 20px; border-radius: var(--radius); background: var(--card); box-shadow: inset 0 0 0 1px var(--line-2); }
+.pair h2 { margin: 0 0 8px; font-size: 18px; }
+.pair ol { margin: 0 0 8px; padding-left: 18px; display: grid; gap: 4px; }
+.pair-text { flex: 1; min-width: 220px; }
+.qr { width: 220px; display: grid; gap: 4px; justify-items: center; }
+.qr svg { width: 220px; height: 220px; background: #fff; border-radius: 8px; }
+.qr-link { font-size: 12px; }
+.live { margin: 0; border-radius: var(--radius); overflow: hidden; background: #000; }
+.live img { display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain; }
+.live.flash { animation: deskflash .5s ease-out; }
+@keyframes deskflash { from { box-shadow: 0 0 0 6px var(--accent); } to { box-shadow: 0 0 0 0 transparent; } }
+.desk-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.desk-bar .spacer { flex: 1; }
+.pill { display: inline-block; padding: 4px 10px; border-radius: 99px; font-size: 13px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink-2); }
+.pill-ok { background: #e3f1e7; color: #1f6a3a; box-shadow: none; }
+.pill-warn { background: #f6e3d6; color: #8a3b14; box-shadow: none; }
+@media (prefers-color-scheme: dark) { .pill-ok { background: #1f3a2a; color: #8fd6a7; } }
+.btn-on { box-shadow: inset 0 0 0 2px #2f8a4f; }
+kbd { font: 12px var(--sans); padding: 1px 5px; border-radius: 4px; background: rgba(255,255,255,.18); margin-left: 4px; }
+.desk-side { display: grid; gap: 10px; }
+.desk-side h2 { margin: 0; }
+.inbox { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 60vh; overflow: auto; }
+.inbox-row { display: flex; gap: 10px; align-items: center; padding: 6px; border-radius: 10px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.inbox-row img { width: 72px; height: 48px; object-fit: cover; border-radius: 6px; background: #000; }
+.inbox-txt { flex: 1; display: grid; }
+.pair[hidden], .live[hidden], .pill[hidden] { display: none; }

@@ -1,10 +1,12 @@
-/* Boekscanner — lampmodus.
-   De telefoon hangt boven het boek en is alleen camera. Hij opent de camera
-   in de hoogste resolutie die Safari toestaat (4K), houdt het scherm wakker
-   en neemt vanzelf een foto zodra het beeld na het omslaan stil is.
-   Opnames blijven lokaal (IndexedDB) en kunnen gedeeld worden (AirDrop).
-   Los van app.js gehouden, zodat de koppeling met de computer (fase 2)
-   hier later op kan aansluiten. */
+/* Boekscanner — camera op de lamp.
+   De iPhone hangt boven het boek en is alleen camera voor de computer.
+   Alles wordt op de computer bediend; hier staat alleen het camerabeeld
+   met één statuslampje. De camera loopt in 4K, het scherm blijft aan,
+   en zodra het beeld na het omslaan stil is wordt er vanzelf opgenomen.
+   Elke opname gaat rechtstreeks naar de computer en wordt hier gewist
+   zodra de computer hem heeft ontvangen. */
+
+import { shots as store, join, toBuffer } from './koppel.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -18,35 +20,16 @@ const MIN_STILL = 2;          // ondergrens voor "stil": een hand die de bladzij
 const MIN_CHANGE = 2.5;       // verschil met de vorige opname dat als nieuwe pagina telt
 const TURN_MOVE = 10;         // zoveel beweging is omslaan: dan altijd een nieuwe opname, ook als de pagina erg lijkt op de vorige
 const JPEG_QUALITY = 0.92;
+const PREVIEW_MS = 300;       // live beeld naar de computer, ongeveer 3 per seconde
+const PREVIEW_W = 960;        // breedte van dat live beeld
+const DIM_MS = 8000;          // na zoveel tijd zonder aanraken wordt het scherm donker (scheelt warmte en accu)
 
-/* ---------- Opslag ---------- */
+/* ---------- Koppelcode ---------- */
 
-const store = {
-  _db: null,
-  open() {
-    if (this._db) return Promise.resolve(this._db);
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open('boekscanner-lamp', 1);
-      req.onupgradeneeded = () => req.result.createObjectStore('shots', { keyPath: 'id' });
-      req.onsuccess = () => { this._db = req.result; resolve(this._db); };
-      req.onerror = () => reject(req.error);
-    });
-  },
-  async run(mode, fn) {
-    const d = await this.open();
-    return new Promise((resolve, reject) => {
-      const t = d.transaction('shots', mode);
-      const r = fn(t.objectStore('shots'));
-      t.oncomplete = () => resolve(r && r.result);
-      t.onerror = () => reject(t.error);
-    });
-  },
-  all() { return this.run('readonly', s => s.getAll()); },
-  count() { return this.run('readonly', s => s.count()); },
-  put(v) { return this.run('readwrite', s => s.put(v)); },
-  del(id) { return this.run('readwrite', s => s.delete(id)); },
-  clear() { return this.run('readwrite', s => s.clear()); },
-};
+// Uit de QR-code op de computer; onthouden, zodat de pagina na herladen weer verbindt.
+const fromHash = new URLSearchParams(location.hash.slice(1)).get('koppel');
+if (fromHash) localStorage.setItem('boekscanner-koppel', fromHash);
+const code = fromHash || localStorage.getItem('boekscanner-koppel');
 
 /* ---------- Beeldvergelijking ---------- */
 
@@ -113,7 +96,8 @@ function createTrigger() {
 const video = $('#video');
 const thumbCanvas = document.createElement('canvas');
 const trigger = createTrigger();
-let stream = null, timer = null, wakeLock = null, audio = null, auto = true, busy = false, sameShown = 0;
+let stream = null, timer = null, previewTimer = null, wakeLock = null, audio = null;
+let auto = true, busy = false, motion = 'still', camOk = false, resLabel = '';
 
 async function startCamera() {
   stopCamera();
@@ -122,59 +106,42 @@ async function startCamera() {
     video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
   });
   const track = stream.getVideoTracks()[0];
-  track.addEventListener('ended', () => showStopped(true));
+  track.addEventListener('ended', () => setCam(false));
   video.srcObject = stream;
   await video.play().catch(() => {});
   await new Promise(r => video.videoWidth ? r() : video.addEventListener('loadedmetadata', r, { once: true }));
-  const w = video.videoWidth, h = video.videoHeight;
-  const big = Math.max(w, h);
-  $('#res').textContent = `${w}×${h}`;
-  $('#res').className = 'pill ' + (big >= 3840 ? 'still' : big >= 1920 ? 'move' : 'warn');
-  $('#res').title = big >= 3840 ? '4K' : 'Lager dan 4K: de tekst wordt minder scherp';
+  resLabel = `${video.videoWidth}×${video.videoHeight}`;
   trigger.reset();
   timer = setInterval(tick, SAMPLE_MS);
-  showStopped(false);
+  startLink();
+  setCam(true);
   await keepAwake();
 }
 
 function stopCamera() {
   clearInterval(timer); timer = null;
+  clearInterval(previewTimer); previewTimer = null;
   if (stream) stream.getTracks().forEach(t => t.stop());
   stream = null;
 }
 
-function showStopped(on) { $('#stopped').hidden = !on; }
-
 async function keepAwake() {
-  const pill = $('#wake');
-  if (!('wakeLock' in navigator)) { pill.textContent = 'zet automatisch slot uit'; pill.className = 'pill warn'; return; }
-  try {
-    wakeLock = await navigator.wakeLock.request('screen');
-    pill.textContent = 'scherm blijft aan'; pill.className = 'pill still';
-    wakeLock.addEventListener('release', () => { pill.textContent = 'scherm kan uitgaan'; pill.className = 'pill warn'; });
-  } catch {
-    pill.textContent = 'zet automatisch slot uit'; pill.className = 'pill warn';
-  }
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { wakeLock = null; }
 }
 
 document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState !== 'visible' || $('#cam').hidden) return;
+  if (document.visibilityState !== 'visible' || !camOk) return;
   await keepAwake();
   const live = stream && stream.getVideoTracks().some(t => t.readyState === 'live');
-  if (!live) showStopped(true);
+  if (!live) setCam(false);
 });
-
-const LABEL = { move: 'beweging', still: 'stil', unsure: 'bijna stil' };
 
 function tick() {
   if (!video.videoWidth || busy) return;
   const thumb = grab(video, thumbCanvas);
   const r = trigger.step(thumb, performance.now());
-  const el = $('#state');
-  if (r.same) sameShown = performance.now();
-  const label = r.state === 'still' && performance.now() - sameShown < 3000 ? 'stil · zelfde pagina' : LABEL[r.state];
-  el.textContent = auto ? label : `${label} · auto uit`;
-  el.className = 'pill ' + (r.state === 'still' ? 'still' : 'move');
+  motion = r.same ? 'same' : r.state;
+  status();
   if (auto && r.fire) capture(thumb);
 }
 
@@ -187,19 +154,12 @@ async function capture(thumb = null) {
     c.width = w; c.height = h;
     c.getContext('2d').drawImage(video, 0, 0, w, h);
     const image = await new Promise(r => c.toBlob(r, 'image/jpeg', JPEG_QUALITY));
-    const tw = 320, th = Math.round(tw * h / w);
-    const t = document.createElement('canvas');
-    t.width = tw; t.height = th;
-    t.getContext('2d').drawImage(c, 0, 0, tw, th);
-    const preview = await new Promise(r => t.toBlob(r, 'image/jpeg', 0.7));
-    const n = (await store.count()) + 1;
-    await store.put({ id: Date.now(), n, width: w, height: h, image, preview, createdAt: new Date().toISOString() });
+    await store.put({ id: Date.now(), width: w, height: h, image, createdAt: new Date().toISOString(), pending: true });
     trigger.taken(thumb || grab(video, thumbCanvas));
     feedback();
-    await updateCount();
+    flush();
   } catch (err) {
     console.error(err);
-    $('#state').textContent = 'opname mislukt'; $('#state').className = 'pill warn';
   } finally {
     busy = false;
   }
@@ -218,104 +178,120 @@ function feedback() {
   o.start(); o.stop(audio.currentTime + 0.16);
 }
 
-async function updateCount() {
-  const n = await store.count();
-  $('#count').textContent = `${n} ${n === 1 ? 'opname' : 'opnames'}`;
-  $('#count0').textContent = n;
-  return n;
-}
+/* ---------- Status: één lampje ---------- */
 
-/* ---------- Opnames ---------- */
-
-let prepared = [];
-const urls = [];
-
-async function showShots() {
-  stopCamera();
-  show('shots');
-  urls.splice(0).forEach(u => URL.revokeObjectURL(u));
-  const shots = (await store.all()).sort((a, b) => a.id - b.id);
-  prepared = shots.map((s, i) => new File([s.image], `opname-${String(i + 1).padStart(3, '0')}.jpg`, { type: 'image/jpeg' }));
-  const grid = $('#grid');
-  grid.innerHTML = shots.length ? '' : '<p class="muted">Nog geen opnames.</p>';
-  shots.forEach((s, i) => {
-    const u = URL.createObjectURL(s.preview || s.image); urls.push(u);
-    const d = document.createElement('div');
-    d.className = 'shot';
-    d.innerHTML = `<img alt="Opname ${i + 1}" src="${u}"><span>${i + 1} · ${s.width}×${s.height}</span><button>Wis</button>`;
-    d.querySelector('button').addEventListener('click', async () => { await store.del(s.id); showShots(); });
-    grid.appendChild(d);
-  });
-  $('#share').disabled = !shots.length;
-  $('#clear').disabled = !shots.length;
-  await updateCount();
-}
-
-$('#share').addEventListener('click', async () => {
-  const files = prepared;
-  if (!files.length) return;
-  // Direct vanuit de tik delen: iOS staat delen alleen toe binnen een gebruikersgebaar.
-  if (navigator.canShare && navigator.canShare({ files })) {
-    try { await navigator.share({ files, title: 'Boekscanner opnames' }); } catch {}
-    return;
+function status() {
+  const linked = !!(link && link.connected);
+  const [cls, text] = !camOk ? ['bad', 'camera gestopt']
+    : !linked ? ['wait', 'zoekt computer']
+    : motion === 'move' || motion === 'unsure' ? ['wait', 'beweging']
+    : ['ok', 'klaar'];
+  const el = $('#status');
+  if (el.dataset.cls !== cls || el.dataset.text !== text) {
+    el.dataset.cls = cls; el.dataset.text = text;
+    el.className = 'status ' + cls;
+    $('#status-text').textContent = text;
   }
-  for (const f of files) {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(f); a.download = f.name;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  }
-});
-
-$('#clear').addEventListener('click', async () => {
-  if (!confirm('Alle opnames wissen?')) return;
-  await store.clear();
-  showShots();
-});
-
-/* ---------- Schermen ---------- */
-
-function show(name) {
-  for (const id of ['start', 'cam', 'shots']) $('#' + id).hidden = id !== name;
 }
 
-async function goCamera() {
-  show('cam');
+function setCam(on) {
+  camOk = on;
+  $('#tap').hidden = on;
+  if (!on) $('#tap-text').textContent = 'De camera is gestopt. Tik om verder te gaan.';
+  status();
+}
+
+/* Scherm donker als niemand kijkt; aantikken laat het beeld weer even zien. */
+let dimTimer = null;
+function wake() {
+  $('#dim').classList.remove('on');
+  clearTimeout(dimTimer);
+  dimTimer = setTimeout(() => { if (link && link.connected) $('#dim').classList.add('on'); else wake(); }, DIM_MS);
+}
+
+/* ---------- Koppeling met de computer ---------- */
+
+let link = null, sending = false;
+const sent = new Set();
+
+function startLink() {
+  if (!link) {
+    link = join(code, {
+      open() {
+        sent.clear();
+        link.send({ t: 'hello', w: video.videoWidth, h: video.videoHeight, auto });
+        flush();
+        status();
+      },
+      close() { status(); wake(); },
+      message(m) {
+        if (!m || typeof m !== 'object') return;
+        if (m.t === 'capture') capture();
+        else if (m.t === 'auto') { auto = !!m.on; trigger.reset(); }
+        else if (m.t === 'ack') store.del(m.id);
+      },
+    });
+  }
+  clearInterval(previewTimer);
+  previewTimer = setInterval(sendPreview, PREVIEW_MS);
+}
+
+/** Klein beeld voor het live beeld op de computer. */
+const previewCanvas = document.createElement('canvas');
+let previewBusy = false;
+const STATE_TEXT = { move: 'beweging', unsure: 'bijna stil', still: 'stil', same: 'stil · zelfde pagina' };
+async function sendPreview() {
+  if (!link || !link.connected || previewBusy || !video.videoWidth || link.buffered > 512 * 1024) return;
+  previewBusy = true;
+  try {
+    const w = PREVIEW_W, h = Math.round(w * video.videoHeight / video.videoWidth);
+    if (previewCanvas.width !== w || previewCanvas.height !== h) { previewCanvas.width = w; previewCanvas.height = h; }
+    previewCanvas.getContext('2d').drawImage(video, 0, 0, w, h);
+    const b = await new Promise(r => previewCanvas.toBlob(r, 'image/jpeg', 0.6));
+    link.send({ t: 'preview', img: await toBuffer(b), state: STATE_TEXT[motion] || '', auto, w: video.videoWidth, h: video.videoHeight });
+  } finally { previewBusy = false; }
+}
+
+/** Alle opnames die de computer nog niet heeft bevestigd, (opnieuw) versturen. */
+async function flush() {
+  if (!link || !link.connected || sending) return;
+  sending = true;
+  try {
+    for (;;) {
+      const todo = (await store.all()).filter(s => s.pending && !sent.has(s.id)).sort((a, b) => a.id - b.id);
+      if (!todo.length || !link.connected) break;
+      for (const s of todo) {
+        if (!link.connected) break;
+        link.send({ t: 'shot', id: s.id, w: s.width, h: s.height, img: await toBuffer(s.image), createdAt: s.createdAt });
+        sent.add(s.id);
+      }
+    }
+  } finally { sending = false; }
+}
+
+/* ---------- Start ---------- */
+
+async function go() {
+  // Eén tik is nodig: iOS geeft het geluid (piep) en soms de camera pas vrij na aanraken.
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch {}
   try {
     await startCamera();
+    wake();
   } catch (err) {
-    show('start');
-    const e = $('#start-err');
-    e.hidden = false;
-    e.textContent = err && err.name === 'NotAllowedError'
-      ? 'Geen toegang tot de camera. Sta cameratoegang toe voor deze website in Safari (aA › Website-instellingen).'
-      : `De camera kon niet starten: ${err && err.message || err}`;
+    $('#tap').hidden = false;
+    $('#tap-text').textContent = err && err.name === 'NotAllowedError'
+      ? 'Geen toegang tot de camera. Sta het toe via aA › Website-instellingen in Safari, en tik dan opnieuw.'
+      : `De camera kon niet starten (${err && err.message || err}). Tik om het opnieuw te proberen.`;
   }
 }
 
-$('#go').addEventListener('click', () => {
-  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch {}
-  goCamera();
-});
-$('#open-shots').addEventListener('click', showShots);
-$('#to-shots').addEventListener('click', showShots);
-$('#back-cam').addEventListener('click', goCamera);
-$('#restart').addEventListener('click', goCamera);
-$('#shoot').addEventListener('click', () => capture());
-$('#auto').addEventListener('click', () => {
-  auto = !auto;
-  trigger.reset();
-  const b = $('#auto');
-  b.classList.toggle('on', auto);
-  b.setAttribute('aria-pressed', String(auto));
-  b.textContent = auto ? 'Auto aan' : 'Auto uit';
-});
-document.addEventListener('keydown', (e) => {
-  if ($('#cam').hidden) return;
-  if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); capture(); }
-});
-
-updateCount();
+if (!code) {
+  $('#tap').hidden = true;
+  $('#nocode').hidden = false;
+} else {
+  $('#tap').addEventListener('click', go);
+  document.addEventListener('pointerdown', () => { if (camOk) wake(); });
+}
 
 // Voor tests.
 window.__lamp = { createTrigger, diff, store };
