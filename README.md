@@ -29,6 +29,7 @@ Handig om te weten:
 - **Hoofdstukken** zijn optioneel: geef aan op welke pagina een hoofdstuk begint, dan kun je per hoofdstuk exporteren.
 - Ligt de foto gedraaid, dan probeert de app zelf de juiste richting. Lukt dat niet, gebruik dan **Draaien**.
 - Koppen, citaten en opsommingen worden herkend en als Markdown opgeslagen (`##`, `>`, `-`).
+- Cursief en vet worden in de foto gemeten (schuinte en lijndikte per woord) en komen als `*cursief*` en `**vet**` in de tekst. Een hoofdstuknummer met titel wordt één kop; de terugkerende paginakop bovenaan (bijvoorbeeld de boektitel in kapitalen) valt weg.
 
 ### Boeken die nog op de iPhone staan
 

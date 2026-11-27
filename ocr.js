@@ -3,7 +3,7 @@
 import {
   grayFromCanvas, canvasFromGray, findPage, warpPage, normalizeLight, estimateSkew, rotate,
   dewarp, removeRules, clearBorders, cropSides, findDropCaps, cropForOcr, whiteOut,
-  findGutter, cropX, turn,
+  findGutter, cropX, turn, measureWords,
 } from './scan.js';
 
 /* ---------- Tekst opbouwen ---------- */
@@ -11,6 +11,106 @@ import {
 const isPageNum = (t) => /^\s*[-–—]?\s*(\d{1,4}|[ivxlc]{1,6})\s*[-–—]?\s*$/i.test(t);
 const median = (a) => { const b = [...a].sort((x, y) => x - y); return b.length ? b[b.length >> 1] : 0; };
 const LIST_RE = /^([•·▪■●◦‣∙*–—-]|\d{1,2}[.)]|[a-z][.)])\s+/;
+
+// Interne tekens voor cursief en vet; pas aan het eind worden het * en **.
+const I0 = '\uE001', I1 = '\uE002', B0 = '\uE003', B1 = '\uE004';
+
+/** Zet opeenvolgende woorden met dezelfde stijl samen tussen stijltekens, met leestekens erbuiten. */
+function styleWords(w) {
+  const out = [];
+  for (let i = 0; i < w.length;) {
+    let j = i; while (j + 1 < w.length && !!w[j + 1].italic === !!w[i].italic && !!w[j + 1].bold === !!w[i].bold) j++;
+    let t = w.slice(i, j + 1).map(x => x.text).join(' ');
+    if (w[i].italic || w[i].bold) {
+      const lead = t.match(/^[‘'“"„(«\[]*/)[0], trail = t.match(/[.,;:!?’'”")»\]]*$/)[0];
+      const core = t.slice(lead.length, t.length - trail.length);
+      if (core) {
+        const [a, b] = w[i].bold && w[i].italic ? [B0 + I0, I1 + B1] : w[i].bold ? [B0, B1] : [I0, I1];
+        t = lead + a + core + b + trail;
+      }
+    }
+    out.push(t);
+    i = j + 1;
+  }
+  return out.join(' ');
+}
+
+/** Stijltekens naar Markdown, met aangrenzende stukken samengevoegd. */
+function styleToMd(t) {
+  // Een woord dat over de regel is afgebroken kan half cursief zijn ("rim-" + "boe"): de tekens
+  // dan naar de woordgrens schuiven, zodat het hele woord cursief is.
+  t = t.replace(/(\p{L}+)([\uE001\uE003])(?=\p{L})/gu, '$2$1').replace(/(\p{L})([\uE002\uE004])(\p{L}+)/gu, '$1$3$2');
+  return t.replace(new RegExp(`${I1}(\\s*)${I0}`, 'g'), '$1').replace(new RegExp(`${B1}(\\s*)${B0}`, 'g'), '$1')
+    .replace(/[\uE001\uE002]/g, '*').replace(/[\uE003\uE004]/g, '**');
+}
+const unstyle = (t) => t.replace(/[\uE001-\uE004]/g, '');
+
+/** Markeert woorden als cursief of vet, gemeten in het voorbewerkte beeld. */
+export function markStyles(blocks, gray) {
+  if (!gray || !blocks) return;
+  const lines = [];
+  for (const b of blocks) for (const p of b.paragraphs || []) for (const l of p.lines || []) {
+    const rh = l.rowAttributes?.rowHeight || 0;
+    for (const w of l.words || []) w._rh = rh || (w.bbox.y1 - w.bbox.y0);
+    lines.push(l.words || []);
+  }
+  const words = lines.flat();
+  const m = measureWords(gray, words.map(w => w.bbox));
+  // Lijndikte ten opzichte van de regelhoogte, zodat grotere letters niet als vet tellen.
+  words.forEach((w, i) => { w._m = m[i]; if (m[i]) m[i].stroke /= w._rh; });
+  const ok = words.filter(w => w._m && /\p{L}{3}/u.test(w.text) && w.confidence > 60);
+  if (ok.length < 15) return;
+  const slant0 = median(ok.map(w => w._m.slant));
+  const stroke0 = median(ok.map(w => w._m.stroke));
+  const h0 = median(ok.map(w => w._m.h));
+  if (globalThis.__dbg) { for (const ws of lines) { const r = ws.map(w => w._m ? `${w.text}:${(w._m.stroke/stroke0).toFixed(2)}/${(w._m.slant-slant0).toFixed(2)}/${w._m.gain.toFixed(2)}` : w.text); console.log('[ocr] ' + r.join(' ')); } }
+  for (const w of words) {
+    const x = w._m;
+    if (!x || !/\p{L}{2}/u.test(w.text)) continue;
+    w.italic = x.slant - slant0 >= 0.15 && x.gain >= 1.06;
+  }
+  // Een licht scheve of kromme foto geeft een schuinte die geleidelijk over de regel verloopt.
+  // Daarom ook vergelijken met de rechtopstaande buren: dan valt zo'n verloop weg, terwijl een
+  // helemaal cursieve regel (geen rechte buren) gewoon cursief blijft.
+  for (const ws of lines) {
+    const flag = ws.map(w => !!w.italic);
+    ws.forEach((w, i) => {
+      if (!flag[i]) return;
+      const nb = ws.filter((o, j) => !flag[j] && Math.abs(j - i) <= 4 && o._m && /\p{L}{3}/u.test(o.text)).map(o => o._m.slant);
+      if (nb.length >= 2 && w._m.slant - median(nb) < 0.12) w.italic = false;
+    });
+  }
+  // Vet: veel dikkere lijnen dan de woorden er direct omheen. Belichting en scherpte verlopen over
+  // een foto, dus alleen vergelijken met de buren in dezelfde regel (en niet te weinig daarvan).
+  for (const ws of lines) {
+    ws.forEach((w, i) => {
+      const x = w._m;
+      if (!x || !/\p{L}{4}/u.test(w.text) || x.stroke < stroke0 * 1.35) return;
+      const nb = ws.filter((o, j) => j !== i && Math.abs(j - i) <= 4 && o._m && /\p{L}{3}/u.test(o.text)).map(o => o._m.stroke);
+      w.bold = nb.length >= 3 && x.stroke >= median(nb) * 1.4;
+    });
+  }
+  // Korte woordjes (van, de, en) binnen een cursief stuk zijn moeilijk te meten: die horen erbij,
+  // ook twee achter elkaar ("De sigaren van de Farao").
+  for (const ws of lines) {
+    for (const k of ['italic', 'bold']) {
+      for (let i = 0; i < ws.length; i++) {
+        if (!ws[i][k]) continue;
+        let j = i + 1;
+        while (j < ws.length && !ws[j][k] && ws[j].text.length <= 4 && j - i <= 2) j++;
+        if (j < ws.length && j > i + 1 && ws[j][k]) for (let q = i + 1; q < j; q++) ws[q][k] = true;
+      }
+    }
+    // Lidwoord met hoofdletter vlak vóór een cursief stuk is het begin van een titel
+    // ("in De sigaren van de Farao"); zulke korte woorden zijn zelf niet te meten.
+    for (let i = 1; i < ws.length; i++) {
+      const a = ws[i - 1];
+      if (ws[i].italic && !a.italic && /^(De|Het|Een)$/.test(a.text) && i >= 2 && !/[.!?:]$/.test(ws[i - 2].text)) a.italic = true;
+    }
+    // Eén los cursief woordje van 2 letters is meestal ruis.
+    for (const w of ws) if (w.italic && w.text.replace(/[^\p{L}]/gu, '').length <= 2 && !ws.some(o => o !== w && o.italic)) w.italic = false;
+  }
+}
 
 /** Regels uit de Tesseract-uitvoer, zonder randruis. */
 function collectLines(blocks) {
@@ -34,11 +134,12 @@ function collectLines(blocks) {
     while (w.length > 1 && w[w.length - 1].text.length <= 2 && far(w[w.length - 2], w[w.length - 1])) w.pop();
     const conf = w.reduce((a, x) => a + x.confidence, 0) / w.length;
     const text = w.map(x => x.text).join(' ');
+    const styled = styleWords(w);
     const letters = text.replace(/[^\p{L}]/gu, '').length;
     if (conf < 50 || (w.length <= 2 && conf < 70 && !isPageNum(text))) continue;
     if (letters === 0 && !isPageNum(text)) continue;
     lines.push({
-      text, block: bi, conf, size: rh, words: w.length, bullet,
+      text, styled, block: bi, conf, size: rh, words: w.length, bullet,
       x0: w[0].bbox.x0, x1: w[w.length - 1].bbox.x1,
       y0: Math.min(...w.map(x => x.bbox.y0)), y1: Math.max(...w.map(x => x.bbox.y1)),
     });
@@ -65,6 +166,7 @@ function reorder(lines) {
     m.conf = (m.conf * m.words + l.conf * l.words) / n;
     if (l.words > m.words) m.block = l.block;
     m.text = `${m.text} ${l.text}`;
+    m.styled = `${m.styled ?? m.text} ${l.styled ?? l.text}`;
     m.words = n; m.x1 = Math.max(m.x1, l.x1);
     m.y0 = Math.min(m.y0, l.y0); m.y1 = Math.max(m.y1, l.y1);
   }
@@ -92,10 +194,14 @@ function reorder(lines) {
 export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
   const lines = collectLines(blocks);
   // Kopregel bovenaan in hoofdletters (bv. "3 · GEHEUGEN") is meestal een terugkerende paginakop.
-  const isRunningHead = (t) => t.split(' ').length <= 6 && /\p{Lu}{3}/u.test(t) && t === t.toUpperCase();
+  const isRunningHead = (t) => {
+    const L = t.replace(/[^\p{L}]/gu, ''), U = L.replace(/[^\p{Lu}]/gu, '');
+    return t.split(' ').length <= 8 && L.length >= 3 && U.length >= L.length * 0.7;
+  };
   if (!sparse) {
     const bodySize0 = median(lines.filter(l => l.words >= 4).map(l => l.size));
-    while (lines.length && (isPageNum(lines[0].text) || (isRunningHead(lines[0].text) && lines[0].size < bodySize0 * 1.3))) lines.shift();
+    // Paginanummer bovenaan weg, maar een groot hoofdstuknummer laten staan.
+    while (lines.length && ((isPageNum(lines[0].text) && lines[0].size < bodySize0 * 1.35) || (isRunningHead(lines[0].text) && lines[0].size < bodySize0 * 1.3))) lines.shift();
   }
   while (lines.length && isPageNum(lines[lines.length - 1].text)) lines.pop();
   if (!lines.length) return '';
@@ -111,6 +217,7 @@ export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
     }
     if (best) {
       best.text = cap.letter + best.text;
+      if (best.styled != null) best.styled = best.styled.replace(/^([\uE001-\uE004]*)/, `$1${cap.letter}`);
       best.x0 = cap.x0;
       for (const l of lines) if (l !== best && l.y0 < cap.y1 && l.y0 > best.y0 && l.x0 > cap.x0) l.besideCap = true;
     }
@@ -142,18 +249,25 @@ export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
     const centered = Math.abs((l.x0 + l.x1) / 2 - (m.left + m.right) / 2) < width * 0.05 && l.x1 - l.x0 < width * 0.8
       && l.x0 > m.left + width * 0.06;
     l.kind = 'text';
-    const headingLike = l.words <= 14 && !/[,;]$/.test(l.text);
+    const letters = l.text.replace(/[^\p{L}]/gu, '').length;
+    const chapterNo = /^\d{1,2}$/.test(l.text.trim()) && rel >= 1.35;
+    const headingLike = l.words <= 14 && !/[,;]$/.test(l.text) && (letters >= 3 || chapterNo);
+    const iPrev = lines.indexOf(l) - 1;
+    const spaceAbove = iPrev < 0 || l.y0 - lines[iPrev].y1 > gap * 1.3;
     if (rel >= 1.35 && headingLike) l.kind = rel >= 1.6 ? 'h2' : 'h3';
-    else if (rel >= 1.18 && l.words <= 8 && headingLike && !/[.!?]$/.test(l.text)) l.kind = 'h3';
+    else if (rel >= 1.18 && l.words <= 8 && headingLike && spaceAbove && !/[.!?]$/.test(l.text)) l.kind = 'h3';
     else if (l.bullet || LIST_RE.test(l.text)) l.kind = 'item';
     else if (centered && l.words <= 12 && !sparse) l.kind = 'center';
     l.indentL = (l.x0 - m.left) / width;
     l.indentR = (m.right - l.x1) / width;
   }
-  // Paginakop: een korte eerste regel in gewone (of kleinere) letter, gecentreerd, met witruimte eronder.
+  // Paginakop (lopende kop): een korte eerste regel in gewone of kleinere letter, gecentreerd of in
+  // kapitalen, met witruimte eronder. Bijvoorbeeld "EEN SUMATRAANSE TIJGER AAN DE MUUR".
   if (!sparse && lines.length >= 8) {
     const [h, n] = lines;
-    if (h.kind === 'center' && h.size < bodySize * 1.15 && n.y0 - h.y1 > gap * 1.5) lines.shift();
+    const caps = isRunningHead(h.text) && h.size < bodySize * 1.3;
+    const centered = h.kind === 'center' && h.size < bodySize * 1.15 && h.words <= 8;
+    if ((caps || centered) && n.y0 - h.y1 > gap * 1.3) lines.shift();
   }
   // Citaten: minstens twee regels die links verder inspringen dan de tekst (bij weinig inspringen
   // alleen met extra witruimte erboven), of één kleinere regel die aan beide kanten inspringt.
@@ -183,7 +297,8 @@ export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
     let join = false;
     if (cur && prev) {
       if (l.kind.startsWith('h') && cur.kind.startsWith('h') && prev.kind.startsWith('h')) {
-        join = l.y0 - prev.y1 < Math.max(l.size, prev.size) * 0.9;
+        // Hoofdstuknummer boven de titel hoort er altijd bij.
+        join = l.y0 - prev.y1 < Math.max(l.size, prev.size) * 0.9 || (/^\d{1,2}$/.test(cur.text.trim()) && l.y0 - prev.y1 < l.size * 4);
         if (join && l.kind === 'h2') cur.kind = 'h2';
       } else if (sparse) {
         join = false;
@@ -197,15 +312,19 @@ export function buildText(blocks, { dropCaps = [], sparse = false } = {}) {
         join = /[\p{L}]-$/u.test(prev.text) && !bigGap;
       }
     }
-    if (!join) { flush(); cur = { kind: l.kind, text: l.text, lines: 1, bullet: l.bullet }; return; }
+    const st = l.styled ?? l.text;
+    if (!join) { flush(); cur = { kind: l.kind, text: l.text, styled: st, lines: 1, bullet: l.bullet }; return; }
     cur.lines++;
-    if (/[\p{L}][-­]$/u.test(cur.text) && /^\p{Ll}/u.test(l.text)) cur.text = cur.text.slice(0, -1) + l.text; // afgebroken woord
-    else cur.text += ' ' + l.text;
+    if (/[\p{L}][-­]$/u.test(cur.text) && /^\p{Ll}/u.test(l.text)) { // afgebroken woord
+      cur.text = cur.text.slice(0, -1) + l.text;
+      cur.styled = cur.styled.replace(/[-­]([\uE001-\uE004]*)$/, '$1') + st;
+    } else { cur.text += ' ' + l.text; cur.styled += ' ' + st; }
   });
   flush();
 
   const md = out.map((b, i) => {
-    const t = clean(b.text);
+    // Opmaak binnen de tekst alleen in gewone alinea's, citaten en opsommingen.
+    const t = clean(!sparse && ['text', 'quote', 'item'].includes(b.kind) ? styleToMd(b.styled) : b.text);
     switch (b.kind) {
       case 'h2': return '## ' + t;
       case 'h3': return '### ' + t;
@@ -323,7 +442,7 @@ function preparePage(img, photo, steps, half = false) {
     clearBorders(inv);
     return canvasFromGray(inv);
   };
-  return { canvas: canvasFromGray(img), dropCaps, crops, inverted };
+  return { canvas: canvasFromGray(img), gray: img, dropCaps, crops, inverted };
 }
 
 /* ---------- Tekstherkenning (Tesseract.js, lokaal) ---------- */
@@ -519,6 +638,7 @@ export const ocr = {
     this.onProgress = onProgress;
     let { data } = await w.recognize(prep.canvas, {}, { text: true, blocks: true });
     this.onProgress = null;
+    markStyles(data.blocks, prep.gray);
     let text = data.blocks ? buildText(data.blocks, { dropCaps: prep.dropCaps }) : tidy(data.text || '');
     let confidence = data.confidence;
     // Weinig of onzekere tekst (omslag, kaders, tekst rond een plaatje)? Probeer losse-tekstmodus,

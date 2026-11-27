@@ -15,6 +15,7 @@
 - Lampmodus: omslaan (veel beweging) telt altijd als nieuwe pagina, ook als de pagina sterk op de vorige lijkt; status 'stil · zelfde pagina' als hij bewust niet opneemt
 - Grote beginletters (initialen) apart herkend en voor het eerste woord gezet
 - Opmaak naar Markdown: koppen (## / ###, ook over twee regels), ondertitel cursief, citaten (>), opsommingen (- en 1.); hoofdstuktitel niet dubbel in de export
+- Cursief en vet uit de foto gemeten (schuinte en lijndikte per woord, vet vergeleken met de buurwoorden); lopende paginakop weg; hoofdstuknummer + titel als één kop
 - Testfoto's + testscript: `node tests/run-ocr-tests.mjs`
 - Back-up/terugzetten (JSON, zonder foto's), persistente opslag aangevraagd
 - iOS: camera altijd direct vanuit een tik geopend; knoppenbalk verborgen tijdens typen

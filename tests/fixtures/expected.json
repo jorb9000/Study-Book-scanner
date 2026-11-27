@@ -57,6 +57,9 @@
   "contains": [
    "Oma en opa stierven kort na elkaar",
    "Zij vertrokken al in 1932 naar Nederland"
+  ],
+  "notContains": [
+   "betovering en desillusie"
   ]
  },
  "echt-2": {
@@ -118,7 +121,14 @@
   "contains": [
    "Ondoordringbare oerwouden",
    "Mijn dromen werden in de hand gewerkt",
-   "Schokkende dingen zijn er in die jaren niet gebeurd"
+   "Schokkende dingen zijn er in die jaren niet gebeurd",
+   "*De sigaren van de Farao*",
+   "*pisang*",
+   "*Zakboekje voor Dienst"
+  ],
+  "notContains": [
+   "EEN SUMATRAANSE TIJGER AAN DE MUUR",
+   "betovering en desillusie"
   ]
  },
  "k3": {
@@ -127,6 +137,11 @@
   "contains": [
    "Mijn Indië-gekte",
    "ziekenhuisbed dat geplaatst"
+  ],
+  "notContains": [
+   "EEN SUMATRAANSE TIJGER AAN DE M",
+   "betovering en desillusie",
+   "betoveringen desillusie"
   ]
  },
  "k4": {
