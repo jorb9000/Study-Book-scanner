@@ -20,6 +20,7 @@ self.onmessage = async (e) => {
     if (op === 'ping') return reply({ ok: true, result: true });
     if (op === 'config') { Object.assign(m.ocrConfig, args[0]); return reply({ ok: true, result: true }); }
     if (op === 'resize') return reply({ ok: true, result: await m.resizeToBlob(...args) });
+    if (op === 'prepare') return reply({ ok: true, result: await m.ocr.preparePages(...args) });
     if (op === 'recognize') {
       const [blob, lang, opts] = args;
       let last = 0;

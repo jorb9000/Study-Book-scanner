@@ -3,6 +3,8 @@
    voorrang (de pagina die je nu nakijkt) gaan vóór het werk op de achtergrond.
    Lukt de worker niet (oude browser), dan draait alles gewoon op de pagina zelf. */
 
+import { claudeSettings, recognizeWithClaude, explain } from './claude.js';
+
 let worker = null, ready = null, seq = 0;
 const pending = new Map();
 let direct = null;   // terugval: ocr.js op de pagina zelf
@@ -47,7 +49,24 @@ async function run(op, args, onProgress) {
   const m = await direct;
   if (op === 'config') return Object.assign(m.ocrConfig, args[0]);
   if (op === 'resize') return m.resizeToBlob(...args);
+  if (op === 'prepare') return m.ocr.preparePages(...args);
   return m.ocr.recognize(args[0], args[1], onProgress, args[2] || {});
+}
+
+/** Herkennen met Claude. Lukt dat niet (geen internet, sleutel fout), dan toch met Tesseract,
+    en een melding voor de app (gebeurtenis 'claude-fout' op window). */
+async function viaClaude(job) {
+  const [blob, lang] = job.args;
+  try {
+    return await recognizeWithClaude(blob, lang, (b, l) => run('prepare', [b, l]), job.onProgress);
+  } catch (err) {
+    console.warn('[claude]', err);
+    const msg = explain(err);
+    window.dispatchEvent(new CustomEvent('claude-fout', { detail: msg }));
+    const res = await run('recognize', job.args, job.onProgress);
+    res.steps = [...(res.steps || []), msg + ' Herkend zonder Claude.'];
+    return res;
+  }
 }
 
 /* ---------- Wachtrij ---------- */
@@ -61,7 +80,8 @@ function pump() {
   const job = queue.shift();
   if (job.cancelled) return pump();
   busy = true;
-  run(job.op, job.args, job.onProgress).then(job.resolve, job.reject).finally(() => { busy = false; pump(); });
+  (job.op === 'recognize' && claudeSettings.active() && !job.args[2]?.figures ? viaClaude(job) : run(job.op, job.args, job.onProgress))
+    .then(job.resolve, job.reject).finally(() => { busy = false; pump(); });
 }
 
 let n = 0;
