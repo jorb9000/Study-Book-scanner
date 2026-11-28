@@ -145,14 +145,50 @@ function tick() {
   if (auto && r.fire) capture(thumb);
 }
 
+/**
+ * Scherpte van het beeld: gemiddelde sterkte van de fijne contrasten (Laplace) in twee stroken
+ * op ware grootte, links en rechts van het midden (daar staat bij een open boek de tekst).
+ * Alleen om beelden van hetzelfde boek met elkaar te vergelijken.
+ */
+const sharpCanvas = document.createElement('canvas');
+function sharpness(src, w, h) {
+  const cw = Math.min(480, Math.round(w / 5)), ch = Math.min(360, Math.round(h / 4));
+  sharpCanvas.width = cw * 2; sharpCanvas.height = ch;
+  const ctx = sharpCanvas.getContext('2d', { willReadFrequently: true });
+  const y = Math.round(h * 0.55 - ch / 2);
+  ctx.drawImage(src, Math.round(w * 0.3 - cw / 2), y, cw, ch, 0, 0, cw, ch);
+  ctx.drawImage(src, Math.round(w * 0.7 - cw / 2), y, cw, ch, cw, 0, cw, ch);
+  const px = ctx.getImageData(0, 0, cw * 2, ch).data, W = cw * 2;
+  const g = new Float32Array(W * ch);
+  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = px[i] * 0.3 + px[i + 1] * 0.59 + px[i + 2] * 0.11;
+  let s = 0, n = 0;
+  for (let yy = 1; yy < ch - 1; yy++) for (let x = 1; x < W - 1; x++) {
+    if (x === cw - 1 || x === cw) continue;
+    const k = yy * W + x;
+    s += Math.abs(4 * g[k] - g[k - 1] - g[k + 1] - g[k - W] - g[k + W]); n++;
+  }
+  return n ? s / n : 0;
+}
+const SHARP_TRIES = 4;        // zoveel beelden vlak na elkaar; de scherpste wordt de opname
+const SHARP_GAP_MS = 120;     // tijd tussen die beelden (een trillende lamp komt in een paar tienden tot rust)
+
 async function capture(thumb = null) {
   if (busy || !video.videoWidth) return;
   busy = true;
   try {
     const w = video.videoWidth, h = video.videoHeight;
+    // Een paar beelden vlak na elkaar, en de scherpste houden: na omslaan of aantikken kan de lamp
+    // nog nawiebelen, en een bewogen opname wordt slecht gelezen.
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
-    c.getContext('2d').drawImage(video, 0, 0, w, h);
+    let best = -1, scores = [];
+    for (let i = 0; i < SHARP_TRIES; i++) {
+      if (i) await new Promise(r => setTimeout(r, SHARP_GAP_MS));
+      const sc = sharpness(video, w, h);
+      scores.push(Math.round(sc * 10) / 10);
+      if (sc > best) { best = sc; c.getContext('2d').drawImage(video, 0, 0, w, h); }
+    }
+    console.debug('[lamp] scherpte', scores.join(' '), '→', Math.round(best * 10) / 10);
     const image = await new Promise(r => c.toBlob(r, 'image/jpeg', JPEG_QUALITY));
     await store.put({ id: Date.now(), width: w, height: h, image, createdAt: new Date().toISOString(), pending: true });
     trigger.taken(thumb || grab(video, thumbCanvas));
@@ -294,4 +330,4 @@ if (!code) {
 }
 
 // Voor tests.
-window.__lamp = { createTrigger, diff, store };
+window.__lamp = { createTrigger, diff, store, sharpness };
