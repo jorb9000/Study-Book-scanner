@@ -67,10 +67,24 @@ try {
   await lamp.click('#tap');
   await desk.waitForSelector('#link-state.pill-ok', { timeout: 30000 });
   check(true, 'iPhone gekoppeld');
+  check(!(await desk.getAttribute('#auto', 'data-on')), 'automatisch opnemen staat bij start uit');
+  check(!(await desk.locator('#zoom').getAttribute('class')).includes('btn-on'), 'inzoomen staat bij start uit');
+  await desk.waitForTimeout(3000);
+  check(await desk.locator('[data-act=open-shot]').count() === 0, 'zonder aanzetten geen automatische opname');
+  check(!(await desk.locator('#fix').getAttribute('class')).includes('btn-on'), 'rechtzetten staat bij start uit');
+  await desk.keyboard.press('KeyS');
+  await desk.waitForTimeout(2500);
+  const fixTxt = await desk.locator('#fix-state').innerText().catch(() => '');
+  check((await desk.locator('#fix').getAttribute('class')).includes('btn-on') && /scheef|recht/.test(fixTxt), `rechtzetten aan (${fixTxt})`);
+  await desk.screenshot({ path: join(out, 'flow-rechtzetten.png') });
+  await desk.keyboard.press('KeyS');
+  await desk.click('#auto');   // nu pas automatisch opnemen
   const rows = () => desk.locator('[data-act=open-shot]').count();
   const t0 = Date.now();
   while (await rows() < 2 && Date.now() - t0 < 25000) await desk.waitForTimeout(500);
   await desk.keyboard.press('KeyA');   // auto uit: het nepbeeld begint steeds opnieuw
+  await desk.waitForTimeout(1500);
+  check(await desk.locator('#auto').innerText().then(t => t.startsWith('Start')) && !(await desk.getAttribute('#auto', 'class')).includes('btn-on'), 'automatisch opnemen weer uit na A');
   check(await rows() >= 2, `automatisch opgenomen (${await rows()} opnames)`);
   const badge = await desk.locator('#live-badge').innerText().catch(() => '');
   check(/Opgenomen · p\. 1\d–1\d/.test(badge), `melding op het live beeld (${badge})`);

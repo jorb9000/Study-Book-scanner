@@ -4,6 +4,7 @@
 import { ocrQueue } from './ocr-client.js';
 import { shots, host, toBlob } from './koppel.js';
 import { grayFromCanvas, findBookBox } from './scan.js';
+import { findTextQuad, plan, warpRGBA, MIN_DEV } from './perspective.js';
 import { figureRefs, removeFigureRef } from './figures.js';
 import { figureStrip, editFigures, applyBoxes, boxesInText } from './figure-ui.js';
 import { resolveFigures, makeZip, printMarkdown } from './export.js';
@@ -1135,14 +1136,16 @@ async function viewDesk(id) {
             <span class="pill" id="link-state">niet gekoppeld</span>
             <span class="pill" id="cam-state" hidden></span>
             <span class="pill pill-warn" id="res-warn" hidden>camera levert geen 4K</span>
+            <span class="pill" id="fix-state" hidden></span>
             <span class="pill" id="shot-count" hidden></span>
             <span class="spacer"></span>
+            <button class="btn btn-quiet" data-act="fix" id="fix" title="Schuin liggend boek rechtzetten, alsof het loodrecht onder de camera ligt (alleen in dit beeld)">Rechtzetten <kbd>S</kbd></button>
             <button class="btn btn-quiet" data-act="zoom" id="zoom" title="Inzoomen op het boek (alleen in dit beeld; de opname blijft het hele beeld)">Inzoomen <kbd>Z</kbd></button>
             <button class="btn btn-quiet" data-act="turn" id="turn" title="Live beeld een kwartslag draaien">${icon('rotate')} Draaien <kbd>R</kbd></button>
-            <button class="btn btn-quiet" data-act="auto" id="auto" disabled>Auto aan <kbd>A</kbd></button>
+            <button class="btn btn-quiet btn-auto" data-act="auto" id="auto" disabled title="Neemt vanzelf op zodra je het boek stilhoudt">Start automatisch opnemen <kbd>A</kbd></button>
             <button class="btn btn-primary" data-act="shoot" id="shoot" disabled>Opnemen <kbd>spatie</kbd></button>
           </div>
-          <p class="muted small">Blader om en houd stil: de iPhone neemt vanzelf op. Of druk op de spatiebalk.</p>
+          <p class="muted small" id="desk-hint">Leg eerst het boek goed onder de camera en zoom eventueel in. Klik dan op <strong>Start automatisch opnemen</strong>: daarna neemt de iPhone vanzelf op als je omslaat en stilhoudt. Of druk zelf op de spatiebalk.</p>
         </div>
 
         <aside class="desk-side">
@@ -1161,15 +1164,57 @@ async function viewDesk(id) {
   let lastFrame = null;
   const thumbs = new Map();   // opname-id → object-URL van de voorbeeldfoto
   // Inzoomen op het boek: alleen de weergave, de camera blijft op 1x en de opname is het hele beeld.
-  let zoomOn = localStorage.getItem('boekscanner-lampzoom') !== 'uit';
+  // Staat bij elke start uit: eerst het boek goed leggen, dan zelf kiezen.
+  let zoomOn = false;
   let box = null;   // gladgestreken uitsnede { x, y, w, h } in pixels van het voorbeeldbeeld
   const probe = document.createElement('canvas');
   const setZoom = (on) => {
     zoomOn = on;
-    localStorage.setItem('boekscanner-lampzoom', on ? 'aan' : 'uit');
     $('#zoom').classList.toggle('btn-on', on);
-    if (lastFrame) drawFrame(lastFrame);
+    if (lastView) drawFrame(lastView);
   };
+  // Rechtzetten: het tekstblok wordt een rechthoek, alsof het boek loodrecht onder de camera ligt.
+  // Ook bij elke start uit. Alleen de weergave; de opname blijft de gewone foto.
+  let fixOn = false, fixQuad = null, fixMiss = 0, lastView = null;
+  const fixCanvas = document.createElement('canvas'), fixSrc = document.createElement('canvas');
+  const setFix = (on) => {
+    fixOn = on; fixQuad = null; fixMiss = 0; box = null;
+    $('#fix').classList.toggle('btn-on', on);
+    $('#fix-state').hidden = true;
+    if (lastFrame) showFrame(lastFrame);
+  };
+  function trackFix(bmp) {
+    const found = findTextQuad(bmp, 640);
+    const st = $('#fix-state');
+    if (!found) {
+      // Even geen tekst te zien (omslaan, hand in beeld): de laatste stand houden.
+      if (++fixMiss >= 6) { fixQuad = null; st.hidden = false; st.textContent = 'rechtzetten lukt niet'; }
+      return;
+    }
+    fixMiss = 0;
+    st.hidden = false;
+    st.textContent = found.dev < MIN_DEV ? 'ligt recht' : `${Math.round(found.dev)}° scheef · rechtgezet`;
+    if (!fixQuad) { fixQuad = found.quad.map(p => [...p]); return; }
+    // Rustig volgen, net als bij inzoomen.
+    const d = Math.max(...found.quad.map((p, i) => Math.hypot(p[0] - fixQuad[i][0], p[1] - fixQuad[i][1])));
+    if (d < 0.01 * Math.max(bmp.width, bmp.height)) return;
+    fixQuad.forEach((p, i) => { p[0] += (found.quad[i][0] - p[0]) * 0.35; p[1] += (found.quad[i][1] - p[1]) * 0.35; });
+  }
+  function fixed(bmp) {
+    const w = bmp.width, h = bmp.height;
+    if (fixSrc.width !== w || fixSrc.height !== h) { fixSrc.width = fixCanvas.width = w; fixSrc.height = fixCanvas.height = h; }
+    const sg = fixSrc.getContext('2d', { willReadFrequently: true });
+    sg.drawImage(bmp, 0, 0);
+    const px = warpRGBA(sg.getImageData(0, 0, w, h), plan(fixQuad, w, h));
+    fixCanvas.getContext('2d').putImageData(new ImageData(px, w, h), 0, 0);
+    return fixCanvas;
+  }
+  function showFrame(bmp) {
+    if (fixOn) trackFix(bmp);
+    lastView = fixOn && fixQuad ? fixed(bmp) : bmp;
+    trackBook(lastView);
+    drawFrame(lastView);
+  }
   function trackBook(bmp) {
     const k = 480 / Math.max(bmp.width, bmp.height);
     probe.width = Math.round(bmp.width * k); probe.height = Math.round(bmp.height * k);
@@ -1216,8 +1261,11 @@ async function viewDesk(id) {
   const setAuto = (on) => {
     const b = $('#auto');
     b.dataset.on = on ? '1' : '';
-    b.innerHTML = (on ? 'Auto aan' : 'Auto uit') + ' <kbd>A</kbd>';
+    b.innerHTML = (on ? 'Stop automatisch opnemen' : 'Start automatisch opnemen') + ' <kbd>A</kbd>';
     b.classList.toggle('btn-on', on);
+    $('#desk-hint').innerHTML = on
+      ? 'Automatisch opnemen staat aan: blader om en houd stil, de iPhone neemt vanzelf op. Of druk op de spatiebalk.'
+      : 'Leg eerst het boek goed onder de camera en zoom eventueel in. Klik dan op <strong>Start automatisch opnemen</strong>: daarna neemt de iPhone vanzelf op als je omslaat en stilhoudt. Of druk zelf op de spatiebalk.';
   };
 
   const d = ensureDesk(id);
@@ -1250,7 +1298,12 @@ async function viewDesk(id) {
       showBadge(`✓ Opgenomen${at ? ' · ' + pagesLabel(at) : ''} · blader door`, 'ok');
     },
     message(m) {
-      if (m.t === 'hello') { setAuto(!!m.auto); setLinked(true); return; }
+      if (m.t === 'hello') {
+        // Nieuwe sessie op de computer: automatisch opnemen begint altijd uit, ook als de iPhone nog aan stond.
+        if (m.auto && !d.autoReset) { link.send({ t: 'auto', on: false }); m.auto = false; }
+        d.autoReset = true;
+        setAuto(!!m.auto); setLinked(true); return;
+      }
       if (m.t === 'preview') {
         // Komt er een beeld binnen terwijl het vorige nog getekend wordt, dan dat nieuwe overslaan.
         if (m.img && !frameBusy) {
@@ -1259,8 +1312,7 @@ async function viewDesk(id) {
             if (!alive) return bmp.close();
             if (lastFrame) lastFrame.close();
             lastFrame = bmp;
-            trackBook(bmp);
-            drawFrame(bmp);
+            showFrame(bmp);
           }).catch(() => {}).finally(() => { frameBusy = false; });
         }
         if (!link.connected) return;
@@ -1367,7 +1419,7 @@ async function viewDesk(id) {
 
   const offBus = bus.on((ev) => {
     if (!alive) return;
-    if (ev.type === 'turn') { if (lastFrame) drawFrame(lastFrame); return; }
+    if (ev.type === 'turn') { if (lastView) drawFrame(lastView); return; }
     if (ev.type === 'progress') {
       const el = document.querySelector(`[data-prog="${ev.key.slice(5)}"]`);
       if (el) el.textContent = ev.pct + '%';
@@ -1408,6 +1460,7 @@ async function viewDesk(id) {
     if (e.repeat) return;
     if (e.code === 'KeyR') lampTurn.set(lampTurn.state.deg + 90, true);
     if (e.code === 'KeyZ') setZoom(!zoomOn);
+    if (e.code === 'KeyS') setFix(!fixOn);
     if (e.code === 'KeyA') toggleAuto();
   };
   const onKeyUp = (e) => { if (e.code === 'Space' && !e.target.closest('input, textarea, select')) e.preventDefault(); };
@@ -1420,6 +1473,7 @@ async function viewDesk(id) {
     if (act === 'shoot') return capture();
     if (act === 'turn') return lampTurn.set(lampTurn.state.deg + 90, true);
     if (act === 'zoom') return setZoom(!zoomOn);
+    if (act === 'fix') return setFix(!fixOn);
     if (act === 'auto') return toggleAuto();
     if (act === 'del-shot') { await shots.del(+el.dataset.id); return drawInbox(); }
     if (act === 'open-shot') return openShot(+el.dataset.id);
