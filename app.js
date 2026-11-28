@@ -1737,7 +1737,7 @@ async function viewBackup() {
   render(`
     <section class="view">
       <header class="top"><a class="back" href="#/">${icon('back')} Boeken</a></header>
-      <h1 class="h1">Back-up</h1>
+      <h1 class="h1">${PHONE ? 'Back-up' : 'Back-up en instellingen'}</h1>
       <p class="lead">Je boeken staan alleen op ${PHONE ? 'deze iPhone' : 'deze computer'}. Maak af en toe een back-up, bijvoorbeeld naar iCloud Drive${PHONE ? ' via "Bewaar in Bestanden"' : ''}.</p>
       <div class="stack">
         <button class="btn btn-quiet btn-block" data-act="export">${icon('share')} Back-up maken</button>
