@@ -47,7 +47,7 @@ async function run(op, args, onProgress) {
   const m = await direct;
   if (op === 'config') return Object.assign(m.ocrConfig, args[0]);
   if (op === 'resize') return m.resizeToBlob(...args);
-  return m.ocr.recognize(args[0], args[1], onProgress);
+  return m.ocr.recognize(args[0], args[1], onProgress, args[2] || {});
 }
 
 /* ---------- Wachtrij ---------- */
@@ -81,7 +81,7 @@ export const ocrQueue = {
   get maxSide() { return maxSide; },
   setMaxSide(n) { maxSide = n; configured = null; },
   /** Herkent een foto. priority > 0: vóór het achtergrondwerk. */
-  recognize: (blob, lang, opts) => enqueue('recognize', [blob, lang], opts),
+  recognize: (blob, lang, opts = {}) => enqueue('recognize', [blob, lang, opts.figures ? { figures: opts.figures } : {}], opts),
   /** Verkleinen/draaien zonder de pagina te belasten; gaat niet in de wachtrij. */
   resize: (blob, maxSide, quality, rotate) => run('resize', [blob, maxSide, quality, rotate]),
   warm: () => start(),

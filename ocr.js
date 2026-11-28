@@ -6,6 +6,9 @@ import {
   findGutter, cropX, turn, measureWords, lineSpacing,
   bookCrop, newCanvas,
 } from './scan.js';
+import {
+  CAPTION_RE, detectFigures, dropFigureWords, chainBack, toneSampler, cropColor, canvasToJpeg, figureMarkdown,
+} from './figures.js';
 
 /* ---------- Tekst opbouwen ---------- */
 
@@ -198,7 +201,7 @@ function reorder(lines) {
 /** Bouwt Markdown uit de regels die Tesseract vindt: alinea's, koppen, citaten en opsommingen.
     dropCaps: [{ letter, x0, y0, x1, y1 }] (grote beginletters die apart zijn herkend).
     sparse: losse tekst (omslag, kaders) — elke regel blijft een eigen regel. */
-export function buildText(blocks, { dropCaps = [], sparse = false, freq = null } = {}) {
+export function buildText(blocks, { dropCaps = [], sparse = false, freq = null, figures = [] } = {}) {
   const lines = collectLines(blocks);
   // Kopregel bovenaan in hoofdletters (bv. "3 · GEHEUGEN") is meestal een terugkerende paginakop.
   const isRunningHead = (t) => {
@@ -211,6 +214,7 @@ export function buildText(blocks, { dropCaps = [], sparse = false, freq = null }
     while (lines.length && ((isPageNum(lines[0].text) && lines[0].size < bodySize0 * 1.35) || (isRunningHead(lines[0].text) && lines[0].size < bodySize0 * 1.3))) lines.shift();
   }
   while (lines.length && isPageNum(lines[lines.length - 1].text)) lines.pop();
+  placeFigures(lines, figures);
   if (!lines.length) return '';
 
   // Grote beginletters terugzetten vóór de regel ernaast.
@@ -252,6 +256,7 @@ export function buildText(blocks, { dropCaps = [], sparse = false, freq = null }
 
   // Soort per regel bepalen.
   for (const l of lines) {
+    if (l.kind === 'figure') continue;
     const m = blockM[l.block], width = Math.max(1, m.right - m.left);
     l.m = m; l.width = width;
     const rel = l.size / bodySize;
@@ -335,6 +340,18 @@ export function buildText(blocks, { dropCaps = [], sparse = false, freq = null }
     } else { cur.text += ' ' + l.text; cur.styled += ' ' + st; }
   });
   flush();
+  // Een alinea die om een beeld heen doorloopt: eerst de hele alinea, dan het beeld.
+  for (let i = 0; i + 2 < out.length; i++) {
+    const a = out[i], b = out[i + 1], c = out[i + 2];
+    if (sparse || b.kind !== 'figure' || a.kind !== 'text' || c.kind !== 'text') continue;
+    if (/[.!?:”"')\]]$/.test(a.text) || !/^\p{Ll}/u.test(c.text)) continue;
+    if (/[\p{L}][-­]$/u.test(a.text)) {
+      a.text = a.text.slice(0, -1) + c.text;
+      a.styled = a.styled.replace(/[-­]([\uE001-\uE004]*)$/, '$1') + c.styled;
+    } else { a.text += ' ' + c.text; a.styled += ' ' + c.styled; }
+    a.lines += c.lines;
+    out.splice(i + 2, 1);
+  }
   // Een blok dat midden in een woord eindigt ("bet-") loopt door in het volgende blok ("gen te zien"),
   // ook als dat als citaat of nieuwe alinea is gezien (inspringing, grote beginletter).
   for (let i = out.length - 2; i >= 0; i--) {
@@ -360,12 +377,47 @@ export function buildText(blocks, { dropCaps = [], sparse = false, freq = null }
         return '- ' + (b.bullet ? t : t.replace(LIST_RE, ''));
       }
       case 'center': return out[i - 1]?.kind?.startsWith('h') ? `*${t}*` : t;
+      case 'figure': return b.text;
       default: return t;
     }
   });
   // Opeenvolgende opsommingstekens zonder lege regel ertussen.
   const isItem = (x) => /^(- |\d{1,2}\. )/.test(x);
   return md.reduce((acc, s, i) => acc + (i ? (isItem(s) && isItem(md[i - 1]) ? '\n' : '\n\n') : '') + s, '');
+}
+
+/** Zet de beelden als eigen regel tussen de tekstregels, op de plek waar ze op de pagina staan,
+    en haalt hun bijschrift ("Figuur 3.2 …") uit de lopende tekst. Nummert de beelden (fig.n) in
+    leesvolgorde en bewaart het bijschrift in fig.caption. */
+function placeFigures(lines, figures) {
+  if (!figures || !figures.length) return;
+  const body = median(lines.filter(l => l.words >= 4).map(l => l.size)) || 20;
+  for (const f of figures) {
+    f.n = 0; f.caption = '';
+    const hov = (l) => Math.min(l.x1, f.x1) - Math.max(l.x0, f.x0) > 0.3 * Math.min(l.x1 - l.x0, f.x1 - f.x0);
+    const isText = (l) => l && l.kind !== 'figure';
+    // Bijschrift: eerst eronder zoeken, dan erboven (tabellen).
+    let i = lines.findIndex(l => isText(l) && hov(l) && l.y0 >= f.y1 - body && l.y0 - f.y1 < body * 3 && CAPTION_RE.test(l.text));
+    if (i < 0) i = lines.findIndex(l => isText(l) && hov(l) && l.y1 <= f.y0 + body && f.y0 - l.y1 < body * 3 && CAPTION_RE.test(l.text));
+    if (i >= 0) {
+      let j = i;
+      // Een bijschrift over meer regels: kleinere letter, dicht op elkaar, de zin loopt door.
+      while (isText(lines[j + 1]) && lines[i].size < body * 0.95 && lines[j + 1].size < body * 0.95
+        && lines[j + 1].y0 > lines[j].y0 && lines[j + 1].y0 - lines[j].y1 < body * 0.8 && hov(lines[j + 1])) j++;
+      const cap = lines.splice(i, j - i + 1);
+      f.caption = cap.map(l => l.text).join(' ').replace(/(\p{L})- (\p{Ll})/gu, '$1$2').replace(/\s+/g, ' ').trim();
+    }
+    // Plek: na de laatste regel erboven (in dezelfde kolom), anders vóór de eerste eronder.
+    let at = -1;
+    lines.forEach((l, k) => { if (hov(l) && l.y1 <= f.y0 + body * 0.5) at = k + 1; });
+    if (at < 0) { at = lines.findIndex(l => hov(l) && l.y0 >= f.y1 - body); }
+    if (at < 0) { const cy = (f.y0 + f.y1) / 2; at = lines.findIndex(l => (l.y0 + l.y1) / 2 > cy); }
+    if (at < 0) at = lines.length;
+    lines.splice(at, 0, { kind: 'figure', fig: f, text: '', styled: '', words: 0, size: body, block: -1, conf: 100,
+      x0: f.x0, x1: f.x1, y0: f.y0, y1: f.y1 });
+  }
+  let n = 0;
+  for (const l of lines) if (l.kind === 'figure') { l.fig.n = ++n; l.text = l.styled = figureMarkdown(n, l.fig.caption); }
 }
 
 /** Hoort het laatste woord van regel a bij het eerste van regel b, terwijl het afbreekstreepje niet
@@ -455,9 +507,13 @@ async function grayOf(blob) {
   const im = await loadImage(blob);
   const scale = Math.min(1, ocrConfig.maxSide / Math.max(im.naturalWidth, im.naturalHeight));
   const c = newCanvas(Math.round(im.naturalWidth * scale), Math.round(im.naturalHeight * scale));
-  c.getContext('2d', { willReadFrequently: true }).drawImage(im, 0, 0, c.width, c.height);
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(im, 0, 0, c.width, c.height);
   im.close?.();
-  return grayFromCanvas(c);
+  const gray = grayFromCanvas(c);
+  // De kleuren blijven bewaard om beelden later in kleur uit te knippen.
+  gray.src = { d: ctx.getImageData(0, 0, c.width, c.height).data, W: c.width, H: c.height };
+  return gray;
 }
 
 /** Maakt de foto klaar voor herkenning: pagina rechtzetten, belichting, scheefstand, kromming,
@@ -465,14 +521,17 @@ async function grayOf(blob) {
     bij de rug in tweeën geknipt. Geeft { pages: [...], steps, canvas } terug. */
 export async function prepareForOcr(blob) {
   let img = await grayOf(blob);
+  const src = img.src;
   const steps = [];
+  // Elke stap die de pagina verplaatst, onthoudt hoe je terugrekent naar de foto (voor de beelden).
+  const base = [];
   const quad = findPage(img);
-  if (quad) { img = warpPage(img, quad); steps.push('pagina'); }
+  if (quad) { img = warpPage(img, quad); base.push(img.back); steps.push('pagina'); }
 
   let photo = img;
   img = normalizeLight(img);
   // Twee pagina's? Eerst het geheel rechtzetten, dan de rug zoeken.
-  let halves = [[img, photo]];
+  let halves = [[img, photo, []]];
   // Veel omgeving in beeld (lampopstelling: bureau, lampkap, hand)? Dan zoeken we de scheefstand
   // en de rug alleen binnen het boek. Anders kan de rand van de lampkap voor de rug worden
   // aangezien, en trekt de lampkap de scheefstand scheef. Er wordt niets weggeknipt.
@@ -494,23 +553,27 @@ export async function prepareForOcr(blob) {
     const inner = findGutter(inBook(straight), inBook(sp));
     if (inner) {
       const gx = x0 + inner;
-      halves = [[cropX(straight, 0, gx), cropX(sp, 0, gx)], [cropX(straight, gx, straight.W), cropX(sp, gx, sp.W)]];
+      const rot = Math.abs(a) >= 0.3 ? straight.back : null;
+      const L = cropX(straight, 0, gx), R = cropX(straight, gx, straight.W);
+      halves = [[L, cropX(sp, 0, gx), [rot, L.back]], [R, cropX(sp, gx, sp.W), [rot, R.back]]];
       steps.push(x0 > 0 || x1 < img.W ? "twee pagina's (rug binnen het boek)" : "twee pagina's");
     }
   }
-  const pages = halves.map(([g, p]) => preparePage(g, p, steps, halves.length > 1));
+  const pages = halves.map(([g, p, ch]) => preparePage(g, p, steps, halves.length > 1, [...base, ...ch], src));
   return { pages, steps, canvas: pages[0].canvas };
 }
 
-function preparePage(img, photo, steps, half = false) {
+function preparePage(img, photo, steps, half = false, chain = [], src = null) {
+  chain = [...chain];
+  let smooth = null;
   const cs = cropSides(img);
   if (cs.cropped) { img = cs.img; steps.push('buurpagina weg'); }
   let angle = estimateSkew(img);
   // Bij een open boek is het geheel al rechtgezet; een grote hoek per pagina is dan ruis (rand, tafel).
   if (half && Math.abs(angle) > 6) angle = 0;
-  if (Math.abs(angle) >= 0.3) { img = rotate(img, angle); steps.push(`scheef ${angle.toFixed(1)}°`); }
+  if (Math.abs(angle) >= 0.3) { img = rotate(img, angle); chain.push(img.back); steps.push(`scheef ${angle.toFixed(1)}°`); }
   const dw = dewarp(img);
-  if (dw.warped) { img = dw.img; steps.push(`krom ${Math.round(dw.maxOff)}px`); }
+  if (dw.warped) { img = dw.img; chain.push(img.back); smooth = [...chain.slice(0, -1), img.backSmooth]; steps.push(`krom ${Math.round(dw.maxOff)}px`); }
   clearBorders(img);
   if (removeRules(img) > 0) steps.push('lijnen');
   const dropCaps = findDropCaps(img);
@@ -524,7 +587,7 @@ function preparePage(img, photo, steps, half = false) {
     clearBorders(inv);
     return canvasFromGray(inv);
   };
-  return { canvas: canvasFromGray(img), gray: img, dropCaps, crops, inverted };
+  return { canvas: canvasFromGray(img), gray: img, dropCaps, crops, inverted, src, back: chainBack(chain), backCrop: chainBack(smooth || chain) };
 }
 
 /* ---------- Tekstherkenning (Tesseract.js, lokaal) ---------- */
@@ -722,7 +785,9 @@ export const ocr = {
     const base = tries.find(t => t.deg === 0)?.s ?? 0;
     return tries[0].s >= 20 && tries[0].s > base * 1.3 ? tries[0].deg : 0;
   },
-  async recognize(blob, lang, onProgress) {
+  /** opts.figures: per pagina de kaders van de beelden (0–1 van de pagina), als je ze zelf hebt
+      aangepast; anders zoekt de herkenning ze zelf. */
+  async recognize(blob, lang, onProgress, opts = {}) {
     const w = await this.get(lang);
     const deg = await this.orientation(blob, lang);
     let image = null;
@@ -733,8 +798,23 @@ export const ocr = {
     for (let i = 0; i < prep.pages.length; i++) {
       pages.push(await this.recognizePage(w, prep.pages[i], prep.steps, onProgress && ((m) => {
         onProgress(m.status === 'recognizing text' ? { ...m, progress: (i + m.progress) / prep.pages.length } : m);
-      })));
+      }), opts.figures?.[i]));
     }
+    // Beelden in kleur uitknippen, en de rechtgezette pagina bewaren (om kaders later aan te passen).
+    let nf = 0;
+    for (let i = 0; i < pages.length; i++) {
+      const pp = prep.pages[i], p = pages[i], { W, H } = pp.gray;
+      if (!pp.src) continue;
+      for (const f of p.figures) {
+        const sc = Math.min(1, 1600 / Math.max(f.x1 - f.x0, f.y1 - f.y0));
+        f.blob = await canvasToJpeg(cropColor(pp.src, pp.backCrop, f, sc), 0.88);
+        f.box = [f.x0 / W, f.y0 / H, f.x1 / W, f.y1 / H];
+        nf++;
+      }
+      p.figures = p.figures.map(({ n, caption, box, blob }) => ({ n, caption, box, blob }));
+      p.scan = await canvasToJpeg(cropColor(pp.src, pp.backCrop, { x0: 0, y0: 0, x1: W, y1: H }, Math.min(1, 2000 / Math.max(W, H))), 0.8);
+    }
+    if (nf) prep.steps.push(`beelden ×${nf}`);
     if (lang.split('+').includes('nld')) {
       const freq = await loadWordFreq();
       let n = 0;
@@ -746,7 +826,7 @@ export const ocr = {
     console.debug('[ocr]', prep.steps.join(', ') || 'geen voorbewerking', `${confidence}%`);
     return { text, confidence, steps: prep.steps, pages, image, rotated: deg };
   },
-  async recognizePage(w, prep, steps, onProgress) {
+  async recognizePage(w, prep, steps, onProgress, manual = null) {
     // Grote beginletters los herkennen, als één hoofdletter.
     for (let i = 0; i < prep.dropCaps.length; i++) {
       await w.setParameters({ tessedit_pageseg_mode: '10', tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÄÉÈÊËÍÏÓÖÔÚÜ' });
@@ -765,8 +845,17 @@ export const ocr = {
     if (up !== 1) scaleBoxes(data.blocks, 1 / up);
     this.onProgress = null;
     markStyles(data.blocks, prep.gray);
+    // Beelden zoeken (of de kaders gebruiken die je zelf hebt getekend) en hun woorden uit de tekst halen.
+    const { W: PW, H: PH } = prep.gray;
+    let figures = [];
+    if (manual) figures = manual.map(([a, b, c, d]) => ({ x0: a * PW, y0: b * PH, x1: c * PW, y1: d * PH }));
+    else if (data.blocks && ocrConfig.figures !== false) {
+      try { figures = detectFigures(prep.gray, prep.src ? toneSampler(prep.src, prep.back) : null, data.blocks); }
+      catch (err) { console.warn('[ocr] beelden zoeken mislukt', err); }
+    }
+    if (figures.length) dropFigureWords(data.blocks, figures);
     const freq = this.lang?.split('+').includes('nld') ? await loadWordFreq() : null;
-    let text = data.blocks ? buildText(data.blocks, { dropCaps: prep.dropCaps, freq }) : tidy(data.text || '');
+    let text = data.blocks ? buildText(data.blocks, { dropCaps: prep.dropCaps, freq, figures }) : tidy(data.text || '');
     let confidence = data.confidence;
     // Weinig of onzekere tekst (omslag, kaders, tekst rond een plaatje)? Probeer losse-tekstmodus,
     // zowel op de gewone als op de omgekeerde versie (lichte letters op een donkere ondergrond).
@@ -775,13 +864,13 @@ export const ocr = {
       const a = (await w.recognize(prep.canvas, {}, { text: true, blocks: true })).data;
       const b = (await w.recognize(prep.inverted(), {}, { text: true, blocks: true })).data;
       await w.setParameters({ tessedit_pageseg_mode: '3' });
-      const blocks = mergeBlocks(a.blocks || [], b.blocks || []);
+      const blocks = mergeBlocks(dropFigureWords(a.blocks || [], figures), dropFigureWords(b.blocks || [], figures));
       if (score(blocks) > score(data.blocks) * 1.15) {
-        text = buildText(blocks, { dropCaps: prep.dropCaps, sparse: true });
+        text = buildText(blocks, { dropCaps: prep.dropCaps, sparse: true, figures });
         confidence = Math.max(a.confidence, b.confidence);
         if (!steps.includes('losse tekst')) steps.push('losse tekst');
       }
     }
-    return { text, confidence: Math.round(confidence) };
+    return { text, confidence: Math.round(confidence), figures: figures.filter(f => f.n) };
   },
 };

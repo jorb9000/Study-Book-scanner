@@ -43,6 +43,11 @@ for (const name of names) {
   const res = await page.evaluate(([u, d]) => { globalThis.__dbg = d; return window.runOcr(u); }, [`/tests/fixtures/${file}`, !!process.env.DBG]);
   const prep = await page.evaluate(([u]) => window.prepared(u), [`/tests/fixtures/${file}`]);
   await writeFile(join(root, `tests/out/${name}.md`), res.text + '\n');
+  // Uitgeknipte beelden: tests/out/<naam>-p<pagina>-beeld-<n>.jpg
+  (res.pages || []).forEach((p, i) => (p.figures || []).forEach(async (f) => {
+    await writeFile(join(root, `tests/out/${name}-p${i + 1}-beeld-${f.n}.jpg`), Buffer.from(f.url.split(',')[1], 'base64'));
+  }));
+  const nFig = (res.pages || []).reduce((s, p) => s + (p.figures || []).length, 0);
   for (let i = 0; i < prep.length; i++) {
     await writeFile(join(root, `tests/out/${name}${prep.length > 1 ? '-' + (i + 1) : ''}.jpg`), Buffer.from(prep[i].split(',')[1], 'base64'));
   }
@@ -53,6 +58,7 @@ for (const name of names) {
   const recall = want.length ? Math.round((100 * found) / want.length) : 100;
   const missing = (exp.contains || []).filter(s => !res.text.includes(s));
   for (const s of exp.notContains || []) if (res.text.includes(s)) missing.push(`mag niet voorkomen: ${s}`);
+  if (exp.figures != null && nFig !== exp.figures) missing.push(`${exp.figures} beelden (nu: ${nFig})`);
   if (exp.startsWith && !res.text.startsWith(exp.startsWith)) missing.push(`begint met ${exp.startsWith} (nu: ${res.text.slice(0, 40)})`);
   // Open boek: staat elke tekst op de juiste pagina? (Lege pagina of beide pagina's in één = fout.)
   if (pageExp[name]) {

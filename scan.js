@@ -236,7 +236,9 @@ export function warpPage(img, quad) {
     const tx = clamp(u - x0, 0, 1), ty = clamp(v - y0, 0, 1), i = y0 * W + x0;
     out[y * w + x] = (g[i] * (1 - tx) + g[i + 1] * tx) * (1 - ty) + (g[i + W] * (1 - tx) + g[i + W + 1] * tx) * ty;
   }
-  return { g: out, W: w, H: h };
+  // back: van een punt in het resultaat terug naar het punt in de foto (om in kleur uit te knippen).
+  const back = (x, y) => { const z = g2 * x + h2 * y + 1; return [(a * x + b2 * y + c) / z, (dd * x + e * y + f) / z]; };
+  return { g: out, W: w, H: h, back };
 }
 
 /* ---------- 2. Belichting ---------- */
@@ -425,7 +427,7 @@ function gutterPass({ g, W, H }, edge, lowF) {
 export function cropX({ g, W, H }, x0, x1) {
   const w = x1 - x0, out = new Uint8ClampedArray(w * H);
   for (let y = 0; y < H; y++) out.set(g.subarray(y * W + x0, y * W + x1), y * w);
-  return { g: out, W: w, H };
+  return { g: out, W: w, H, back: (x, y) => [x + x0, y] };
 }
 
 /** Draait een grijsbeeld een kwartslag (90 = met de klok mee) of 180 graden. */
@@ -481,7 +483,8 @@ export function rotate(img, deg) {
     const x0 = u | 0, y0 = v | 0, tx = u - x0, ty = v - y0, i = y0 * W + x0;
     out[y * W + x] = (g[i] * (1 - tx) + g[i + 1] * tx) * (1 - ty) + (g[i + W] * (1 - tx) + g[i + W + 1] * tx) * ty;
   }
-  return { g: out, W, H };
+  const back = (x, y) => { const dx = x - cx, dy = y - cy; return [dx * c - dy * s + cx, dx * s + dy * c + cy]; };
+  return { g: out, W, H, back };
 }
 
 /* ---------- 4. Kromme regels rechttrekken ---------- */
@@ -697,7 +700,23 @@ export function dewarp(img) {
       out[Y * OW + X] = (G[i] * (1 - tx) + G[i + 1] * tx) * (1 - ty) + (G[i + FW] * (1 - tx) + G[i + FW + 1] * tx) * ty;
     }
   }
-  return { img: { g: out, W: OW, H: FH }, warped: true, maxOff: maxOff * f, lines: lines.length,
+  const backWith = (D) => (X, Y) => {
+    const fk = clamp((X / f - xs[0]) / step, 0, K - 1), k0 = Math.min(K - 1, fk | 0), k1 = Math.min(K - 1, k0 + 1), t = fk - k0;
+    const yy = clamp((Y / f) | 0, 0, H - 1);
+    return [X, Y + (D[k0][yy] * (1 - t) + D[k1][yy] * t) * f];
+  };
+  // Voor het uitknippen van beelden een gladdere versie: een foto of grafiek tussen de regels moet
+  // niet golven door kleine verschillen tussen de gevolgde regels.
+  const R = Math.max(1, Math.round(K / 8));
+  const DS = D.map((_, k) => {
+    const o = new Float32Array(H);
+    let n = 0;
+    for (let j = Math.max(0, k - R); j <= Math.min(K - 1, k + R); j++) { n++; for (let yy = 0; yy < H; yy++) o[yy] += D[j][yy]; }
+    for (let yy = 0; yy < H; yy++) o[yy] /= n;
+    return o;
+  });
+  const back = backWith(D), backSmooth = backWith(DS);
+  return { img: { g: out, W: OW, H: FH, back, backSmooth }, warped: true, maxOff: maxOff * f, lines: lines.length,
     tracks: lines.map(l => Array.from(l.y, (v, k) => [xs[k] * f, v * f, l.ok[k]])) };
 }
 
