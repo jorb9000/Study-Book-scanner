@@ -789,6 +789,42 @@ function variants(w) {
 const matchCase = (orig, w) => orig === orig.toUpperCase() && orig.length > 1 ? w.toUpperCase()
   : orig[0] === orig[0].toUpperCase() ? w[0].toUpperCase() + w.slice(1) : w;
 
+/** Instellingen voor twijfelwoorden (los te zetten voor de tests). */
+export const DOUBT = { low: 40, short: 0, unknown: 85, compound: 50 };
+const keyOf = (t) => t.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+/**
+ * Woorden in de tekst waar de herkenning aan twijfelt: Tesseract was onzeker, of het woord staat
+ * niet in de woordenlijst en Tesseract was ook niet heel zeker. Geeft per woord de plek in de tekst
+ * (i, len) en, als bekend, waar het op de pagina staat (box, 0–1).
+ */
+export function findDoubts(text, words, freq = null) {
+  const pool = new Map();
+  for (const w of words) {
+    const k = keyOf(w.t);
+    if (!k) continue;
+    if (!pool.has(k)) pool.set(k, []);
+    pool.get(k).push(w);
+  }
+  const out = [];
+  for (const m of text.matchAll(/[\p{L}\p{N}][\p{L}\p{N}'’\-]*/gu)) {
+    const t = m[0].replace(/[-'’]+$/, ''), k = keyOf(t);
+    if (k.length < 2 || !/\p{L}/u.test(k)) continue;
+    const list = pool.get(k);
+    const w = list && list.length ? list.shift() : null;
+    const c = w ? w.c : null;
+    const parts = k.match(/\p{L}+/gu) || [];
+    const known = !freq || !freq.size || parts.every(q => q.length < 2 || freq.has(q));
+    const name = /^\p{Lu}/u.test(t);
+    const lowC = known && k.length <= 3 ? DOUBT.short : DOUBT.low;
+    // Lange samenstellingen (plantersboeken) staan vaak niet in de woordenlijst maar zijn wel goed.
+    const compound = k.length >= 9 && (c == null || c >= DOUBT.compound);
+    const doubt = (c != null && c < lowC) || (!known && !name && !compound && (c == null || c < DOUBT.unknown));
+    if (doubt || DOUBT.all) out.push({ i: m.index, len: t.length, word: t, conf: c == null ? null : Math.round(c), box: w ? w.b : null, known, doubt });
+  }
+  return out;
+}
+
 export function fixWords(text, freq) {
   let fixed = 0;
   if (!freq || !freq.size) return { text, fixed };
@@ -950,6 +986,8 @@ export const ocr = {
       for (const p of pages) { const r = fixWords(p.text, freq); const r2 = fixSpacing(r.text, freq); p.text = r2.text; n += r.fixed + r2.fixed; }
       if (n) prep.steps.push(`woorden ×${n}`);
     }
+    const freqD = lang.split('+').includes('nld') ? await loadWordFreq() : null;
+    for (const p of pages) { p.doubts = findDoubts(p.text, p.words || [], freqD); delete p.words; }
     const text = pages.map(p => p.text).join('\n\n');
     const confidence = Math.round(pages.reduce((s, p) => s + p.confidence, 0) / pages.length);
     console.debug('[ocr]', prep.steps.join(', ') || 'geen voorbewerking', `${confidence}%`);
@@ -1000,6 +1038,12 @@ export const ocr = {
         if (!steps.includes('losse tekst')) steps.push('losse tekst');
       }
     }
-    return { text, confidence: Math.round(confidence), figures: figures.filter(f => f.n) };
+    // Alle woorden met hoe zeker Tesseract was en waar ze staan (0–1 van de pagina), voor de twijfelwoorden.
+    const words = [];
+    for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || []) for (const x of l.words || []) {
+      if (!x.text || !/[\p{L}\p{N}]/u.test(x.text)) continue;
+      words.push({ t: x.text, c: x.confidence, b: [x.bbox.x0 / PW, x.bbox.y0 / PH, x.bbox.x1 / PW, x.bbox.y1 / PH] });
+    }
+    return { text, confidence: Math.round(confidence), figures: figures.filter(f => f.n), words };
   },
 };
