@@ -3,7 +3,7 @@
 Een eenvoudige web-app om studieboeken in delen te scannen. Je bedient alles op je computer; de iPhone ligt op een bureaulamp boven het boek en is alleen de camera. De app houdt per boek bij welke pagina's klaar zijn, welke ontbreken en waar je verder moet. De tekst exporteer je als Markdown.
 
 - Werkt zonder account. Boeken en teksten blijven op je computer.
-- Tekstherkenning gebeurt op de computer zelf (Nederlands en/of Engels), ook offline.
+- Tekstherkenning gebeurt op de computer zelf (Nederlands en/of Engels), ook offline. Wil je het nauwkeuriger, dan kan Claude de tekst lezen (zie "Nauwkeuriger lezen met Claude").
 - Geen installatie nodig: open de link in Safari of Chrome.
 
 ## Opstelling
