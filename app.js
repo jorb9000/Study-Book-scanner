@@ -1742,6 +1742,7 @@ async function viewBackup() {
       ${usage ? `<p class="muted small">${usage}${persisted ? ' · opslag beschermd' : ''}</p>` : ''}
       <hr class="rule">
       <p class="muted small">Boekscanner werkt offline. De tekstherkenning gebeurt op ${PHONE ? 'je telefoon' : 'je computer'}; er wordt niets verstuurd.</p>
+      <p class="muted small">Versie ${esc(self.APP_VERSION || 'onbekend')}</p>
     </section>
   `);
 
