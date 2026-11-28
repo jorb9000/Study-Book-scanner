@@ -107,5 +107,26 @@
     "stevig aan te pakken"
    ]
   }
+ ],
+ "fig-2": [
+  {
+   "has": [
+    "(#beeld-1)",
+    "Economen beschrijven"
+   ],
+   "not": [
+    "groenteveiling"
+   ]
+  },
+  {
+   "has": [
+    "groenteveiling",
+    "](#beeld-1)",
+    "](#beeld-2)"
+   ],
+   "not": [
+    "Economen"
+   ]
+  }
  ]
 }

@@ -353,3 +353,48 @@ kbd { font: 12px var(--sans); padding: 1px 5px; border-radius: 4px; background: 
 .live-badge-ok { background: rgba(31, 122, 64, .92); }
 .live-badge-same { background: rgba(40, 40, 40, .8); }
 @keyframes badgein { from { opacity: 0; transform: translate(-50%, -6px); } }
+
+/* ---------- Beelden ---------- */
+.fig-strip { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; margin: -4px 0 16px; }
+.fig-thumb { position: relative; margin: 0; width: calc(50% - 5px); max-width: 220px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.fig-thumb img { display: block; width: 100%; height: 110px; object-fit: contain; background: #fff; }
+.fig-thumb figcaption { font-size: 12px; line-height: 1.3; color: var(--ink-2); padding: 6px 8px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.fig-del { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; border-radius: 50%; border: 0; background: rgba(0,0,0,.55); color: #fff; font-size: 18px; line-height: 1; cursor: pointer; }
+.fig-edit { align-self: center; }
+
+.fig-editor { position: fixed; inset: 0; z-index: 30; background: var(--paper); display: flex; flex-direction: column; padding-top: var(--safe-t); }
+.fig-editor-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.fig-editor-top .btn { height: 40px; padding: 0 16px; }
+.fig-editor-hint { margin: 8px 16px; font-size: 13px; color: var(--ink-2); }
+.fig-editor-scroll { flex: 1; overflow: auto; padding: 8px 16px calc(16px + var(--safe-b)); }
+.fig-editor-page { position: relative; margin: 0 auto; max-width: 900px; touch-action: none; user-select: none; -webkit-user-select: none; }
+.fig-editor-page img { display: block; width: 100%; pointer-events: none; }
+.fig-layer { position: absolute; inset: 0; }
+.fig-box { position: absolute; border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); cursor: move; }
+.fig-box.sel { border-width: 3px; }
+.fig-h { position: absolute; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); border: 2px solid #fff; }
+.fig-h[data-h="nw"] { left: -12px; top: -12px; cursor: nwse-resize; }
+.fig-h[data-h="ne"] { right: -12px; top: -12px; cursor: nesw-resize; }
+.fig-h[data-h="sw"] { left: -12px; bottom: -12px; cursor: nesw-resize; }
+.fig-h[data-h="se"] { right: -12px; bottom: -12px; cursor: nwse-resize; }
+.fig-x { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border-radius: 50%; border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: 20px; line-height: 1; cursor: pointer; }
+
+/* ---------- PDF (afdrukken) ---------- */
+#print-root { display: none; }
+@media print {
+  @page { size: A4; margin: 18mm 18mm 20mm; }
+  body.printing > *:not(#print-root) { display: none !important; }
+  body.printing { background: #fff; }
+  body.printing #print-root { display: block; }
+  .print-book { font: 11pt/1.5 Georgia, "Times New Roman", serif; color: #111; }
+  .print-book h1 { font: 700 22pt/1.2 Georgia, serif; margin: 0 0 14pt; }
+  .print-book h2 { font: 700 15pt/1.25 Georgia, serif; margin: 16pt 0 6pt; break-after: avoid; }
+  .print-book h3, .print-book h4 { font: 700 12pt/1.3 Georgia, serif; margin: 12pt 0 4pt; break-after: avoid; }
+  .print-book p { margin: 0 0 7pt; text-align: justify; orphans: 2; widows: 2; }
+  .print-book p.pn { font-size: 8.5pt; color: #888; text-align: right; margin: 10pt 0 2pt; }
+  .print-book blockquote { margin: 6pt 0 8pt 14pt; padding-left: 8pt; border-left: 2pt solid #ccc; color: #333; }
+  .print-book figure { margin: 10pt 0 12pt; text-align: center; break-inside: avoid; }
+  .print-book figure img { max-width: 100%; max-height: 120mm; }
+  .print-book figcaption { font: italic 9.5pt/1.35 Georgia, serif; color: #333; margin-top: 4pt; text-align: left; }
+  .print-book ul, .print-book ol { margin: 0 0 7pt 18pt; padding: 0; }
+}

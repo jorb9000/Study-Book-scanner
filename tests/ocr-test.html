@@ -12,6 +12,12 @@
     let res;
     try { res = await ocr.recognize(blob, lang); }
     catch (e) { throw new Error('Herkenning mislukt: ' + (e?.stack || e?.message || JSON.stringify(e) || String(e))); }
+    // Beelden als data-URL terug (Blobs kunnen niet uit de pagina).
+    const toUrl = (b) => new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(b); });
+    for (const p of res.pages || []) {
+      for (const f of p.figures || []) { f.url = await toUrl(f.blob); delete f.blob; }
+      if (p.scan) { p.scanUrl = await toUrl(p.scan); delete p.scan; }
+    }
     return { ...res, ms: Math.round(performance.now() - t) };
   };
   window.prepared = async (url) => {

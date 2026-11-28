@@ -4,6 +4,9 @@
 import { ocrQueue } from './ocr-client.js';
 import { shots, host, toBlob } from './koppel.js';
 import { grayFromCanvas, findBookBox } from './scan.js';
+import { figureRefs, removeFigureRef } from './figures.js';
+import { figureStrip, editFigures, applyBoxes, boxesInText } from './figure-ui.js';
+import { resolveFigures, makeZip, printMarkdown } from './export.js';
 
 // Op de computer foto's minder verkleinen: 4K-opnames van de lamp blijven dan scherp genoeg.
 if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) ocrQueue.setMaxSide(4096);
@@ -575,10 +578,12 @@ async function viewReview(id) {
         <span class="sr-only">Herkende tekst</span>
         <textarea id="text" spellcheck="true" lang="${book.lang === 'eng' ? 'en' : 'nl'}"></textarea>
       </label>
+      <div id="figs0"></div>
       <label class="text-wrap" id="text-wrap2" hidden>
         <span class="page-label" id="pl2"></span>
         <textarea id="text2" spellcheck="true" lang="${book.lang === 'eng' ? 'en' : 'nl'}"></textarea>
       </label>
+      <div id="figs1"></div>
       <button class="chip" data-act="unsplit" id="unsplit" hidden>Toch één pagina</button>
       <p class="muted small" id="conf"></p>
     </section>
@@ -612,7 +617,14 @@ async function viewReview(id) {
     $('#unsplit').hidden = !two;
     if (two) { ta2.value = draft.text2; pageLabels(); }
     autosize();
+    showFigs();
     setButtons(true);
+  };
+  // Beelden onder elk tekstvak (miniaturen, weghalen, kaders aanpassen).
+  const showFigs = () => {
+    const two = isSpread();
+    $('#figs0').innerHTML = draft.figs ? figureStrip(ta.value, draft.figs[0]?.figures, urlOf, { page: 0, editable: !!draft.figs[0]?.scan }) : '';
+    $('#figs1').innerHTML = two && draft.figs?.[1] ? figureStrip(ta2.value, draft.figs[1].figures, urlOf, { page: 1, editable: !!draft.figs[1].scan }) : '';
   };
   const grow = (el) => { el.style.height = 'auto'; el.style.height = Math.max(220, el.scrollHeight + 2) + 'px'; };
   const autosize = () => { grow(ta); if (isSpread()) grow(ta2); };
@@ -625,6 +637,7 @@ async function viewReview(id) {
       draft[field] = el.value;
       const d = await db.get('drafts', id);
       if (d && d.createdAt === draft.createdAt) { d[field] = el.value; await db.put('drafts', d); }
+      if (alive) showFigs();
     }, 400);
   };
   ta.addEventListener('input', () => { grow(ta); keep('text', ta); });
@@ -641,6 +654,7 @@ async function viewReview(id) {
   const showBusy = (text, pct = null) => {
     setButtons(false);
     $('#text-wrap').hidden = true; $('#text-wrap2').hidden = true; $('#unsplit').hidden = true;
+    $('#figs0').innerHTML = ''; $('#figs1').innerHTML = '';
     $('#conf').textContent = '';
     status.hidden = false;
     bar.style.width = (pct ?? 0) + '%';
@@ -698,10 +712,13 @@ async function viewReview(id) {
     for (let i = 0; i < texts.length; i++) {
       const n = draft.pageNumber + i, id_ = pageId(id, n);
       const old = await db.get('pages', id_);
+      const fg = draft.figs?.[i];
+      const used = new Set(figureRefs(texts[i]).map(r => r.n));
       await db.put('pages', {
         id: id_, bookId: id, pageNumber: n,
         text: texts[i].trim(), confidence: draft.confidence ?? null,
         image: thumb, savedAt: Date.now(), createdAt: old?.createdAt || Date.now(),
+        figures: (fg?.figures || []).filter(f => used.has(f.n)), scan: fg?.scan || null,
       });
     }
     await db.del('drafts', id);
@@ -720,7 +737,14 @@ async function viewReview(id) {
     if (act === 'pn-inc') return setPn(draft.pageNumber + 1);
     if (act === 'pn-dec') return setPn(draft.pageNumber - 1);
     if (act === 'unsplit') {
-      draft.text = [ta.value, ta2.value].filter(t => t.trim()).join('\n\n');
+      // Beelden van de tweede pagina doornummeren, zodat de verwijzingen uniek blijven.
+      let t2 = ta2.value;
+      if (draft.figs?.length === 2) {
+        const off = Math.max(0, ...(draft.figs[0].figures || []).map(f => f.n));
+        t2 = t2.replace(/\]\(#beeld-(\d+)\)/g, (m, k) => `](#beeld-${+k + off})`);
+        draft.figs = [{ scan: null, text: null, figures: [...(draft.figs[0].figures || []), ...(draft.figs[1].figures || []).map(f => ({ ...f, n: f.n + off }))] }];
+      }
+      draft.text = [ta.value, t2].filter(t => t.trim()).join('\n\n');
       draft.text2 = null;
       await db.put('drafts', draft);
       return showText(draft.text);
@@ -731,12 +755,42 @@ async function viewReview(id) {
       const d = await db.get('drafts', id);
       if (!d || d.createdAt !== draft.createdAt) return;
       d.image = await ocrQueue.resize(d.image, ocrQueue.maxSide, 0.92, 90);
-      d.text = null; d.text2 = null; d.confidence = null;
+      d.text = null; d.text2 = null; d.confidence = null; d.figs = null;
       await db.put('drafts', d);
       Object.assign(draft, d);
       if (!alive) return;
       setPhoto(draft.image);
       return startOcr();
+    }
+    if (act === 'fig-del') {
+      const el2 = +el.dataset.page ? ta2 : ta;
+      el2.value = removeFigureRef(el2.value, +el.dataset.n);
+      grow(el2); keep(+el.dataset.page ? 'text2' : 'text', el2);
+      return showFigs();
+    }
+    if (act === 'fig-edit') {
+      const i = +el.dataset.page, el2 = i ? ta2 : ta, fg = draft.figs?.[i];
+      if (!fg?.scan) return toast('Kaders aanpassen kan alleen direct na het herkennen');
+      const list = await editFigures(fg.scan, boxesInText(el2.value, fg.figures));
+      if (!list || !alive) return;
+      clearTimeout(ta._t); clearTimeout(ta2._t);
+      if (el2.value === fg.text) {
+        // Tekst nog niet aangepast: opnieuw herkennen met deze kaders. Dan verdwijnen ook de woorden
+        // uit de beelden uit de tekst, en wordt het bijschrift gevonden.
+        const figures = draft.figs.map((g, j) => (j === i ? list.map(b => b.box) : boxesInText(j ? ta2.value : ta.value, g.figures).map(b => b.box)));
+        const d = await db.get('drafts', id);
+        if (!d || d.createdAt !== draft.createdAt) return;
+        recognizeDraft(id, book.lang, draft, figures);
+        return follow();
+      }
+      // Tekst al aangepast: die laten staan en alleen de beelden bijwerken.
+      const r = await applyBoxes(el2.value, fg.figures, fg.scan, list);
+      el2.value = r.text; grow(el2);
+      draft.figs[i] = { ...fg, figures: r.figures };
+      draft[i ? 'text2' : 'text'] = r.text;
+      const d = await db.get('drafts', id);
+      if (d && d.createdAt === draft.createdAt) { d.figs = draft.figs; d[i ? 'text2' : 'text'] = r.text; await db.put('drafts', d); }
+      return showFigs();
     }
     if (act === 'retake') {
       book.nextPage = draft.pageNumber;
@@ -809,10 +863,12 @@ const resultFields = (res) => ({
   text2: res.pages && res.pages.length === 2 ? res.pages[1].text : null,
   turned: res.image || null,
   deg: res.rotated || 0,
+  // Per pagina: de rechtgezette pagina (om kaders aan te passen), de beelden en de herkende tekst.
+  figs: (res.pages || []).map(p => ({ scan: p.scan || null, figures: p.figures || [], text: p.text })),
 });
 
 /** Herkent het concept van een boek opnieuw (met voorrang: je zit erop te wachten). */
-function recognizeDraft(bookId, lang, draft) {
+function recognizeDraft(bookId, lang, draft, figures = null) {
   const key = `draft:${bookId}:${uid()}`;
   draft.job = key;
   activeJobs.set(key, { key, pct: 0 });
@@ -823,12 +879,12 @@ function recognizeDraft(bookId, lang, draft) {
       if (d && d.createdAt === draft.createdAt) {
         d.job = key; d.text = null; d.text2 = null;
         await db.put('drafts', d);
-        res = await ocrQueue.recognize(d.image, lang, { priority: 1, onProgress: progressOf_(key) });
+        res = await ocrQueue.recognize(d.image, lang, { priority: 1, onProgress: progressOf_(key), figures });
       }
     } catch (err) { console.error(err); }
     const cur = await db.get('drafts', bookId);
     if (cur && cur.job === key) {
-      if (res) { const f = resultFields(res); Object.assign(cur, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || cur.image }); }
+      if (res) { const f = resultFields(res); Object.assign(cur, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || cur.image, figs: f.figs }); }
       cur.job = null;
       await db.put('drafts', cur);
     }
@@ -904,7 +960,7 @@ const bg = {
       // Intussen geopend in het nakijkscherm: het resultaat hoort nu bij het concept.
       const d = await db.get('drafts', s.bookId);
       if (d && d.job === key) {
-        if (f) Object.assign(d, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || d.image });
+        if (f) Object.assign(d, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || d.image, figs: f.figs });
         d.job = null;
         await db.put('drafts', d);
       }
@@ -917,7 +973,7 @@ const bg = {
       toast('Dubbele opname weggelaten: dezelfde pagina\'s als de vorige');
       return done();
     }
-    await patchShot(s.id, (x) => Object.assign(x, { status: 'done', confidence: f.confidence, rotated: f.turned, text: f.text, text2: f.text2 }));
+    await patchShot(s.id, (x) => Object.assign(x, { status: 'done', confidence: f.confidence, rotated: f.turned, text: f.text, text2: f.text2, figs: f.figs }));
     if (f.confidence >= 60) lampTurn.auto(f.deg);
     done();
   },
@@ -992,6 +1048,7 @@ async function takeFromInbox(bookId, shotId = null) {
     text: done ? s.text : null,
     text2: done ? (s.text2 ?? null) : null,
     confidence: done ? s.confidence : null,
+    figs: done ? (s.figs || null) : null,
     shotId: s.id, job: !done && activeJobs.has(key) ? key : null,
     rotate: 0, createdAt: Date.now(), fromLamp: true,
   });
@@ -1006,7 +1063,7 @@ async function returnDraft(bookId) {
   const running = d.job && activeJobs.has(d.job) && d.job === `shot:${d.shotId}`;
   await shots.put({
     id: d.shotId || Date.now(), bookId, image: d.image, thumb: d.thumb || null, rotated: null,
-    text: d.text, text2: d.text2 ?? null, confidence: d.confidence ?? null,
+    text: d.text, text2: d.text2 ?? null, confidence: d.confidence ?? null, figs: d.figs || null,
     status: d.text != null ? 'done' : running ? 'busy' : 'new', createdAt: new Date(d.createdAt).toISOString(),
   });
   await db.del('drafts', bookId);
@@ -1418,6 +1475,7 @@ async function viewPage(id, n) {
         <span class="sr-only">Tekst</span>
         <textarea id="text" spellcheck="true" lang="${book.lang === 'eng' ? 'en' : 'nl'}">${esc(page.text)}</textarea>
       </label>
+      <div id="figs0"></div>
       <p class="muted small" id="saved">Wijzigingen worden automatisch bewaard.</p>
     </section>
     <footer class="dock dock-2">
@@ -1427,23 +1485,45 @@ async function viewPage(id, n) {
   `);
 
   const ta = $('#text');
+  const urls = [];
+  const urlOf = (b) => { const u = URL.createObjectURL(b); urls.push(u); return u; };
+  const showFigs = () => { $('#figs0').innerHTML = figureStrip(ta.value, page.figures, urlOf, { editable: !!page.scan }); };
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.max(260, ta.scrollHeight + 2) + 'px'; };
   autosize();
+  showFigs();
+  const store = async () => {
+    page.text = ta.value;
+    page.savedAt = Date.now();
+    await db.put('pages', page);
+    $('#saved').textContent = 'Bewaard';
+    showFigs();
+  };
   ta.addEventListener('input', () => {
     autosize();
     clearTimeout(ta._t);
-    ta._t = setTimeout(async () => {
-      page.text = ta.value;
-      page.savedAt = Date.now();
-      await db.put('pages', page);
-      $('#saved').textContent = 'Bewaard';
-    }, 400);
+    ta._t = setTimeout(() => { ta._t = null; store(); }, 400);
   });
 
   const onClick = async (e) => {
     const el = e.target.closest('[data-act]');
     if (!el) return;
     if (el.dataset.act === 'copy') { await copyText(ta.value); return; }
+    if (el.dataset.act === 'fig-del') {
+      clearTimeout(ta._t);
+      ta.value = removeFigureRef(ta.value, +el.dataset.n);
+      autosize();
+      return store();
+    }
+    if (el.dataset.act === 'fig-edit') {
+      if (!page.scan) return;
+      const list = await editFigures(page.scan, boxesInText(ta.value, page.figures));
+      if (!list) return;
+      clearTimeout(ta._t);
+      const r = await applyBoxes(ta.value, page.figures, page.scan, list);
+      ta.value = r.text; page.figures = r.figures;
+      autosize();
+      return store();
+    }
     if (el.dataset.act === 'rescan') {
       book.nextPage = n;
       await db.put('books', book);
@@ -1461,13 +1541,16 @@ async function viewPage(id, n) {
   cleanup = () => {
     app.removeEventListener('click', onClick);
     if (imgUrl) URL.revokeObjectURL(imgUrl);
+    urls.forEach(u => URL.revokeObjectURL(u));
     if (ta._t) { clearTimeout(ta._t); page.text = ta.value; db.put('pages', page); }
   };
 }
 
 /* ---------- Exporteren ---------- */
 
-function buildMarkdown(book, pages, chapterId) {
+/** Markdown van het boek (of één hoofdstuk). images: 'files' (verwijzingen naar beelden/…, de
+    bestanden komen in files), 'urls' (voor de PDF) of 'none' (zonder beelden). */
+function buildMarkdown(book, pages, chapterId, images = 'none', files = []) {
   const chs = chapterRanges(book);
   const only = chapterId ? chs.find(c => c.id === chapterId) : null;
   const list = pages
@@ -1486,6 +1569,7 @@ function buildMarkdown(book, pages, chapterId) {
     const ch = chapterFor(book, p.pageNumber);
     const first = text.match(/^#{1,6} (.*)(\n|$)/);
     if (ch && first && same(first[1], ch.title)) text = text.slice(first[0].length).trim();
+    text = resolveFigures(text, p, images, files);
     out.push(`*p. ${p.pageNumber}*\n\n${text}`);
   }
   return out.join('\n\n') + '\n';
@@ -1509,8 +1593,8 @@ async function copyText(text) {
   }
 }
 
-async function shareFile(name, text, type = 'text/markdown') {
-  const file = new File([text], name, { type });
+async function shareFile(name, data, type = 'text/markdown') {
+  const file = new File([data], name, { type });
   // Op de computer gewoon downloaden (naar Downloads); het deelmenu is daar geen opslaan.
   if (PHONE && navigator.canShare && navigator.canShare({ files: [file] })) {
     try { await navigator.share({ files: [file], title: name }); return; }
@@ -1532,8 +1616,11 @@ async function viewExport(id) {
   let sel = pre && chs.some(c => c.id === pre) ? pre : '';
 
   const draw = () => {
-    const md = buildMarkdown(book, pages, sel || null);
-    const words = md.split(/\s+/).filter(Boolean).length;
+    const files = [];
+    const md = buildMarkdown(book, pages, sel || null, 'files', files);
+    const plain = buildMarkdown(book, pages, sel || null, 'none');
+    const words = plain.split(/\s+/).filter(Boolean).length;
+    const nf = files.length;
     render(`
       <section class="view">
         <header class="top">
@@ -1548,19 +1635,31 @@ async function viewExport(id) {
               ${chs.map(c => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${esc(c.title)}</option>`).join('')}
             </select>
           </label>` : ''}
-        <p class="muted small">Markdown · ${words.toLocaleString('nl-NL')} woorden</p>
+        <p class="muted small">Markdown · ${words.toLocaleString('nl-NL')} woorden${nf ? ` · ${nf} ${nf === 1 ? 'beeld' : 'beelden'}` : ''}</p>
+        ${nf ? `<p class="muted small">Je krijgt een zip met het .md-bestand en een map <i>beelden</i>. Pak hem uit en open het .md-bestand, dan staan de beelden op hun plek.</p>` : ''}
+        <button class="btn btn-quiet btn-block" data-act="pdf">${icon('share')} Als PDF bewaren</button>
         <pre class="preview">${esc(md.length > 4000 ? md.slice(0, 4000) + '\n…' : md)}</pre>
       </section>
       <footer class="dock dock-2">
         <button class="btn btn-quiet" data-act="copy">${icon('copy')} Kopiëren</button>
-        <button class="btn btn-primary" data-act="share">${icon('share')} ${PHONE ? 'Bewaar / deel' : 'Downloaden (.md)'}</button>
+        <button class="btn btn-primary" data-act="share">${icon('share')} ${PHONE ? 'Bewaar / deel' : nf ? 'Downloaden (.zip)' : 'Downloaden (.md)'}</button>
       </footer>
     `);
+    const ch = chs.find(c => c.id === sel);
+    const base = `${slug(book.title)}${ch ? '-' + slug(ch.title) : ''}`;
     $('#sel')?.addEventListener('change', (e) => { sel = e.target.value; draw(); });
-    $('[data-act="copy"]').onclick = () => copyText(md);
-    $('[data-act="share"]').onclick = () => {
-      const ch = chs.find(c => c.id === sel);
-      shareFile(`${slug(book.title)}${ch ? '-' + slug(ch.title) : ''}.md`, md);
+    // Kopiëren: alleen de tekst (beelden kun je niet als tekst kopiëren; de bijschriften blijven staan).
+    $('[data-act="copy"]').onclick = () => copyText(plain);
+    $('[data-act="share"]').onclick = async () => {
+      if (!nf) return shareFile(`${base}.md`, md);
+      const zip = await makeZip([{ name: `${base}.md`, text: md }, ...files]);
+      shareFile(`${base}.zip`, zip, 'application/zip');
+    };
+    $('[data-act="pdf"]').onclick = async () => {
+      const urls = [];
+      const pmd = buildMarkdown(book, pages, sel || null, 'urls', urls);
+      await printMarkdown(book.title + (ch ? ' - ' + ch.title : ''), pmd);
+      urls.forEach(u => URL.revokeObjectURL(u));
     };
   };
   draw();
@@ -1585,7 +1684,7 @@ async function viewBackup() {
         <button class="btn btn-quiet btn-block" data-act="export">${icon('share')} Back-up maken</button>
         <button class="btn btn-quiet btn-block" data-act="import">Back-up terugzetten</button>
       </div>
-      <p class="muted small">De back-up bevat alle teksten, hoofdstukken en voortgang, zonder foto's.</p>
+      <p class="muted small">De back-up bevat alle teksten, hoofdstukken en voortgang, zonder foto's en beelden.</p>
       ${usage ? `<p class="muted small">${usage}${persisted ? ' · opslag beschermd' : ''}</p>` : ''}
       <hr class="rule">
       <p class="muted small">Boekscanner werkt offline. De tekstherkenning gebeurt op ${PHONE ? 'je telefoon' : 'je computer'}; er wordt niets verstuurd.</p>
@@ -1593,7 +1692,7 @@ async function viewBackup() {
   `);
 
   $('[data-act="export"]').onclick = async () => {
-    const data = { app: 'boekscanner', version: 1, exportedAt: new Date().toISOString(), books: await db.all('books'), pages: (await db.all('pages')).map(({ image, ...p }) => p) };
+    const data = { app: 'boekscanner', version: 1, exportedAt: new Date().toISOString(), books: await db.all('books'), pages: (await db.all('pages')).map(({ image, scan, figures, ...p }) => p) };
     const d = new Date().toISOString().slice(0, 10);
     shareFile(`boekscanner-backup-${d}.json`, JSON.stringify(data, null, 1), 'application/json');
   };
@@ -1610,7 +1709,7 @@ importInput.addEventListener('change', async () => {
     for (const b of data.books) await db.put('books', b);
     for (const p of data.pages) {
       const cur = await db.get('pages', p.id);
-      await db.put('pages', { ...p, image: cur?.image || null });
+      await db.put('pages', { ...p, image: cur?.image || null, scan: cur?.scan || null, figures: cur?.figures || [] });
     }
     toast('Back-up teruggezet');
     go('#/');
