@@ -24,6 +24,7 @@
 - Computer: herkenning in een eigen worker (pagina blijft klikbaar), wachtrij op de achtergrond voor alle opnames, opnames los aanklikbaar met verwachte paginanummers; flowtest met nepcamera (`tests/run-flow-test.mjs`)
 - Beelden: foto's, grafieken en schema's worden op de pagina gevonden, in kleur uitgeknipt en als `![bijschrift](#beeld-n)` op hun plek in de tekst gezet, met het bijschrift ("Figuur 3.2 …") eronder; aslabels en legenda verdwijnen uit de lopende tekst (figures.js). In de app: miniaturen onder de tekst, weghalen, kaders aanpassen/toevoegen op de rechtgezette pagina (figure-ui.js). Testfoto's: `node tests/make-figure-fixtures.mjs` (fig-1, fig-2), app-test: `node tests/run-figure-app-test.mjs`
 - Export met beelden: zip met .md en map beelden/, en PDF via het afdrukmenu (Bewaar als PDF) met de beelden en bijschriften op hun plek (export.js)
+- Claude-modus (optioneel, claude.js): eigen API-sleutel alleen in de browser, per rechtgezette pagina een verzoek aan Claude (standaard Opus 5.5, keuze Sonnet/Haiku), Markdown in leesvolgorde met beelden en bijschriften; beelden worden uitgeknipt uit de rechtgezette pagina; terugval op Tesseract met melding. Test met nep-API: `node tests/run-claude-test.mjs`. Nog niet getest met een echte sleutel.
 
 ## Getest (Chromium, iPhone 13-formaat)
 - Volledige flow, herladen tijdens beoordelen, opslaan & volgende, gaten en terugspringen, overschrijven, opnieuw scannen
