@@ -1,5 +1,5 @@
 /* Offline: app-bestanden vooraf, tekstherkenning bij eerste gebruik. */
-const VERSION = 'v15';
+const VERSION = 'v16';
 const SHELL = `boekscanner-shell-${VERSION}`;
 const OCR = 'boekscanner-ocr-v1';
 const FILES = [
@@ -10,7 +10,7 @@ const FILES = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -37,7 +37,9 @@ self.addEventListener('fetch', (e) => {
   // App: eerst netwerk (zodat updates binnenkomen), anders cache.
   e.respondWith((async () => {
     try {
-      const res = await fetch(e.request);
+      // no-cache: altijd bij de server navragen of er een nieuwe versie is, ook als de browser het
+      // bestand nog in zijn eigen cache heeft (GitHub Pages laat dat 10 minuten staan).
+      const res = await fetch(url.href, { cache: 'no-cache', credentials: 'same-origin' });
       if (res.ok) (await caches.open(SHELL)).put(e.request, res.clone());
       return res;
     } catch {
