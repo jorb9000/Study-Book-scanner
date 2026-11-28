@@ -364,16 +364,92 @@ export function bookCrop(img) {
 
 /** Zoekt de rug tussen twee pagina's (een liggende foto van een open boek).
     Geeft de x van de rug terug, of null als er maar één pagina op staat. */
-export function findGutter(img, photo = null) {
+export function findGutter(img, photo = null, wide = false, hint = null, sure = false) {
+  // wide: de aanroeper weet dat het om een liggend boek gaat, ook al is het beeld bijna vierkant
+  // (klein boek met veel omgeving erboven en eronder). Dan alleen een rug met tekst aan beide kanten.
+  // hint: waar de rug ongeveer zit (x in pixels van img), uit eerdere opnames of door jou in het live
+  // beeld aangewezen (sure). Alleen een aangewezen rug geldt ook als er daar niets te vinden is.
   const { W: W0, H: H0 } = img;
-  if (W0 < H0 * 1.1) return null;
+  const square = W0 < H0 * 1.1;
+  if (square && !wide && hint == null) return null;
   const f = workScale(img, 4);
   const sm = shrink(img, f);
   // Eerst: een strook zonder tekst tussen de pagina's. Lukt dat niet (kleine letters, schaduw in de
   // rug), dan de schaduw van de vouw zelf: een smal, donkerder dal in de helderheid van de foto.
-  let x = gutterPass(sm, 0, 0.06);
+  const pass = gutterPass(sm, 0, 0.06);
+  if (hint != null && hint > 0 && hint < W0) {
+    // Met een aanwijzing: de lege strook of de vouw vlak daarbij (het boek kan iets verschoven
+    // zijn), anders de aanwijzing zelf.
+    const hx = hint / f, win = sm.W * 0.04;
+    const near = (pass?.strips || []).map(([a, b]) => (a + b) / 2).filter(m => Math.abs(m - hx) <= win)
+      .sort((a, b) => Math.abs(a - hx) - Math.abs(b - hx))[0];
+    let x = near ?? null;
+    if (x == null && photo) {
+      const fs = Math.max(1, Math.round(photo.W / 800));
+      const v = foldLine(shrink(photo, fs), [(hx - win) * f / fs, (hx + win) * f / fs]);
+      if (v != null) x = (v * fs) / f;
+    }
+    if (globalThis.__dbg) console.log('[ocr] rug met aanwijzing', Math.round(hx), sure ? '(aangewezen)' : '', '→', x == null ? '-' : Math.round(x));
+    if (x != null || sure) return Math.round((x ?? hx) * f);
+  }
+  let x = pass?.x ?? null;
+  // Geen lege strook, of een strook met veel meer tekst aan één kant (vaak de witruimte tussen
+  // twee kolommen van één pagina, terwijl een plaat over de echte rug loopt)? Dan de vouw zelf
+  // zoeken: een smal, iets donkerder dal in het papier, over de hele hoogte van het boek.
+  if (photo && (x == null || pass.bal < 0.3)) {
+    const fs = Math.max(1, Math.round(photo.W / 800));
+    const v = foldLine(shrink(photo, fs));
+    const fx = v == null ? null : (v * fs) / f;
+    const fb = fx == null ? 0 : pass ? pass.balAt(fx) : 0.5;
+    if (globalThis.__dbg) console.log('[ocr] vouw', fx && Math.round(fx), 'balans', fb.toFixed(2), 'strook', x, pass && pass.bal.toFixed(2));
+    if (fx != null && (fb >= 0.3 && (x == null || fb > pass.bal + 0.05))) x = fx;
+  }
+  if (square) {
+    // Bijna vierkant: alleen een duidelijke rug, met aan beide kanten een flink deel van de tekst.
+    if (x == null || !pass || pass.balAt(x) < 0.3) return null;
+    return Math.round(x * f);
+  }
   if (x == null && photo) x = foldValley(shrink(photo, f));
   return x == null ? null : Math.round(x * f);
+}
+
+/**
+ * De vouw van een open boek: in elke horizontale strook van de foto nemen we per kolom het
+ * lichte papier (80e percentiel, dus tekst telt niet), en zoeken daarin een smal dal tussen twee
+ * lichte kanten. De x waar dat in de meeste stroken gebeurt, is de rug. Werkt ook als een plaat
+ * over de rug loopt: boven en onder de plaat is de vouw dan nog te zien.
+ */
+export function foldLine({ g, W, H }, range = null) {
+  const nb = 30, bh = Math.floor(H / nb);
+  if (bh < 3 || W < 100) return null;
+  const w = Math.max(2, Math.round(W * 0.03));
+  const votes = new Float64Array(W);
+  const col = new Uint8Array(bh), P = new Float64Array(W), Q = new Float64Array(W);
+  const k = Math.floor(bh * 0.8);
+  for (let b = 0; b < nb; b++) {
+    for (let x = 0; x < W; x++) {
+      for (let y = 0; y < bh; y++) col[y] = g[(b * bh + y) * W + x];
+      col.sort();
+      P[x] = col[k];
+    }
+    for (let x = 0; x < W; x++) Q[x] = (P[Math.max(0, x - 1)] + P[x] + P[Math.min(W - 1, x + 1)]) / 3;
+    const xa = Math.max(w, Math.round(range ? range[0] : W * 0.25)), xb = Math.min(W - 1 - w, Math.round(range ? range[1] : W * 0.75));
+    for (let x = xa; x <= xb; x++) {
+      let ml = 0, mr = 0;
+      for (let d = 1; d <= w; d++) { if (Q[x - d] > ml) ml = Q[x - d]; if (Q[x + d] > mr) mr = Q[x + d]; }
+      const side = Math.min(ml, mr);
+      if (side < 110) continue;
+      const dip = side / Math.max(1, Q[x]) - 1;
+      if (dip > 0.03) votes[x] += Math.min(dip, 0.3);
+    }
+  }
+  let best = -1, bv = 0;
+  for (let x = 2; x < W - 2; x++) {
+    const v = votes[x - 2] + votes[x - 1] + votes[x] + votes[x + 1] + votes[x + 2];
+    if (v > bv) { bv = v; best = x; }
+  }
+  // Minstens in een paar stroken een duidelijk dal (5 × 0,3 per strook is het maximum).
+  return best >= 0 && bv / 5 >= 0.4 ? best : null;
 }
 
 function foldValley({ g, W, H }) {
@@ -427,17 +503,18 @@ function gutterPass({ g, W, H }, edge, lowF) {
   }
   const cum = new Float64Array(W + 1);
   for (let x = 0; x < W; x++) cum[x + 1] = cum[x] + col[x];
-  let best = null, bs = 0;
+  let best = null, bs = 0, bestBal = 0;
   for (const [s0, s1] of strips) {
     const mid = (s0 + s1) / 2;
     const left = cum[Math.round(mid)], right = cum[W] - left;
     const bal = Math.min(left, right) / Math.max(1, left + right);
     if (bal < 0.15) continue;
     const sc = (s1 - s0) * bal;
-    if (sc > bs) { bs = sc; best = mid; }
+    if (sc > bs) { bs = sc; best = mid; bestBal = bal; }
   }
   if (globalThis.__dbg) console.log('[ocr] rug', W, strips.map(([s0, s1]) => `${s0}-${s1}:${(Math.min(cum[Math.round((s0 + s1) / 2)], cum[W] - cum[Math.round((s0 + s1) / 2)]) / cum[W]).toFixed(2)}`).join(' '), '→', best);
-  return best;
+  const balAt = (x) => { const l = cum[Math.max(0, Math.min(W, Math.round(x)))]; return Math.min(l, cum[W] - l) / Math.max(1, cum[W]); };
+  return { x: best, bal: bestBal, balAt, strips };
 }
 
 /** Knipt een stuk [x0, x1) uit een grijsbeeld. */

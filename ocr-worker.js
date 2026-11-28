@@ -32,7 +32,7 @@ self.onmessage = async (e) => {
       }, opts || {});
       // Alleen wat de app gebruikt (geen canvassen of Tesseract-blokken terugsturen).
       return reply({ ok: true, result: {
-        text: res.text, confidence: res.confidence, steps: res.steps, image: res.image, rotated: res.rotated,
+        text: res.text, confidence: res.confidence, steps: res.steps, image: res.image, rotated: res.rotated, spine: res.spine ?? null,
         pages: (res.pages || []).map(p => ({ text: p.text, confidence: p.confidence, figures: p.figures || [], scan: p.scan || null })),
       } });
     }

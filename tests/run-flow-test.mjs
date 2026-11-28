@@ -72,6 +72,29 @@ try {
   await desk.waitForTimeout(3000);
   check(await desk.locator('[data-act=open-shot]').count() === 0, 'zonder aanzetten geen automatische opname');
   check(!(await desk.locator('#fix').getAttribute('class')).includes('btn-on'), 'rechtzetten staat bij start uit');
+  // De rug-lijn in het live beeld verslepen: wordt onthouden bij het boek, als aangewezen.
+  const bookSpine = () => desk.evaluate(() => new Promise((res) => {
+    const r = indexedDB.open('boekscanner', 1);
+    r.onsuccess = () => { const t = r.result.transaction('books').objectStore('books').getAll(); t.onsuccess = () => res(t.result[0]?.spine || null); };
+  }));
+  const box = await desk.locator('#live').boundingBox();
+  await desk.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await desk.mouse.down();
+  await desk.mouse.move(box.x + box.width * 0.46, box.y + box.height * 0.5, { steps: 5 });
+  await desk.mouse.move(box.x + box.width * 0.42, box.y + box.height * 0.5, { steps: 5 });
+  await desk.mouse.up();
+  await desk.waitForTimeout(300);
+  let sp = await bookSpine();
+  check(sp && sp.hand && Math.abs(sp.x - 0.42) < 0.01, `rug versleept en onthouden (${sp && sp.x.toFixed(3)}, ${sp && sp.hand ? 'vast' : 'automatisch'})`);
+  await desk.screenshot({ path: join(out, 'flow-rug.png') });
+  await desk.mouse.dblclick(box.x + box.width * 0.42, box.y + box.height * 0.5);
+  await desk.waitForTimeout(300);
+  sp = await bookSpine();
+  check(sp && !sp.hand, 'dubbelklik: rug weer automatisch');
+  await desk.mouse.move(box.x + box.width * 0.42, box.y + box.height * 0.5);
+  await desk.mouse.down();
+  await desk.mouse.move(box.x + box.width * 0.42 + 2, box.y + box.height * 0.5, { steps: 2 });
+  await desk.mouse.up();
   await desk.keyboard.press('KeyS');
   await desk.waitForTimeout(2500);
   const fixTxt = await desk.locator('#fix-state').innerText().catch(() => '');
