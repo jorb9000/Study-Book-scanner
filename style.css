@@ -328,6 +328,8 @@ input::placeholder { color: var(--muted); }
 .pill-warn { background: #f6e3d6; color: #8a3b14; box-shadow: none; }
 @media (prefers-color-scheme: dark) { .pill-ok { background: #1f3a2a; color: #8fd6a7; } }
 .btn-on { box-shadow: inset 0 0 0 2px #2f8a4f; }
+.btn-auto:not(:disabled) { background: #2f8a4f; color: #fff; box-shadow: none; font-weight: 600; }
+.btn-auto.btn-on { background: #b3412e; color: #fff; box-shadow: none; }
 kbd { font: 12px var(--sans); padding: 1px 5px; border-radius: 4px; background: rgba(255,255,255,.18); margin-left: 4px; }
 .desk-side { display: grid; gap: 10px; }
 .desk-side h2 { margin: 0; }

@@ -97,7 +97,7 @@ const video = $('#video');
 const thumbCanvas = document.createElement('canvas');
 const trigger = createTrigger();
 let stream = null, timer = null, previewTimer = null, wakeLock = null, audio = null;
-let auto = true, busy = false, motion = 'still', camOk = false, resLabel = '';
+let auto = false, busy = false, motion = 'still', camOk = false, resLabel = '';
 
 async function startCamera() {
   stopCamera();

@@ -1139,10 +1139,10 @@ async function viewDesk(id) {
             <span class="spacer"></span>
             <button class="btn btn-quiet" data-act="zoom" id="zoom" title="Inzoomen op het boek (alleen in dit beeld; de opname blijft het hele beeld)">Inzoomen <kbd>Z</kbd></button>
             <button class="btn btn-quiet" data-act="turn" id="turn" title="Live beeld een kwartslag draaien">${icon('rotate')} Draaien <kbd>R</kbd></button>
-            <button class="btn btn-quiet" data-act="auto" id="auto" disabled>Auto aan <kbd>A</kbd></button>
+            <button class="btn btn-quiet btn-auto" data-act="auto" id="auto" disabled title="Neemt vanzelf op zodra je het boek stilhoudt">Start automatisch opnemen <kbd>A</kbd></button>
             <button class="btn btn-primary" data-act="shoot" id="shoot" disabled>Opnemen <kbd>spatie</kbd></button>
           </div>
-          <p class="muted small">Blader om en houd stil: de iPhone neemt vanzelf op. Of druk op de spatiebalk.</p>
+          <p class="muted small" id="desk-hint">Leg eerst het boek goed onder de camera en zoom eventueel in. Klik dan op <strong>Start automatisch opnemen</strong>: daarna neemt de iPhone vanzelf op als je omslaat en stilhoudt. Of druk zelf op de spatiebalk.</p>
         </div>
 
         <aside class="desk-side">
@@ -1161,12 +1161,12 @@ async function viewDesk(id) {
   let lastFrame = null;
   const thumbs = new Map();   // opname-id → object-URL van de voorbeeldfoto
   // Inzoomen op het boek: alleen de weergave, de camera blijft op 1x en de opname is het hele beeld.
-  let zoomOn = localStorage.getItem('boekscanner-lampzoom') !== 'uit';
+  // Staat bij elke start uit: eerst het boek goed leggen, dan zelf kiezen.
+  let zoomOn = false;
   let box = null;   // gladgestreken uitsnede { x, y, w, h } in pixels van het voorbeeldbeeld
   const probe = document.createElement('canvas');
   const setZoom = (on) => {
     zoomOn = on;
-    localStorage.setItem('boekscanner-lampzoom', on ? 'aan' : 'uit');
     $('#zoom').classList.toggle('btn-on', on);
     if (lastFrame) drawFrame(lastFrame);
   };
@@ -1216,8 +1216,11 @@ async function viewDesk(id) {
   const setAuto = (on) => {
     const b = $('#auto');
     b.dataset.on = on ? '1' : '';
-    b.innerHTML = (on ? 'Auto aan' : 'Auto uit') + ' <kbd>A</kbd>';
+    b.innerHTML = (on ? 'Stop automatisch opnemen' : 'Start automatisch opnemen') + ' <kbd>A</kbd>';
     b.classList.toggle('btn-on', on);
+    $('#desk-hint').innerHTML = on
+      ? 'Automatisch opnemen staat aan: blader om en houd stil, de iPhone neemt vanzelf op. Of druk op de spatiebalk.'
+      : 'Leg eerst het boek goed onder de camera en zoom eventueel in. Klik dan op <strong>Start automatisch opnemen</strong>: daarna neemt de iPhone vanzelf op als je omslaat en stilhoudt. Of druk zelf op de spatiebalk.';
   };
 
   const d = ensureDesk(id);
@@ -1250,7 +1253,12 @@ async function viewDesk(id) {
       showBadge(`✓ Opgenomen${at ? ' · ' + pagesLabel(at) : ''} · blader door`, 'ok');
     },
     message(m) {
-      if (m.t === 'hello') { setAuto(!!m.auto); setLinked(true); return; }
+      if (m.t === 'hello') {
+        // Nieuwe sessie op de computer: automatisch opnemen begint altijd uit, ook als de iPhone nog aan stond.
+        if (m.auto && !d.autoReset) { link.send({ t: 'auto', on: false }); m.auto = false; }
+        d.autoReset = true;
+        setAuto(!!m.auto); setLinked(true); return;
+      }
       if (m.t === 'preview') {
         // Komt er een beeld binnen terwijl het vorige nog getekend wordt, dan dat nieuwe overslaan.
         if (m.img && !frameBusy) {
