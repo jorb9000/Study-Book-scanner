@@ -401,6 +401,8 @@ kbd { font: 12px var(--sans); padding: 1px 5px; border-radius: 4px; background: 
   .print-book ul, .print-book ol { margin: 0 0 7pt 18pt; padding: 0; }
 }
 
+.wordmark-ver { font: 500 12px/1 var(--sans); color: var(--muted); letter-spacing: 0; vertical-align: middle; margin-left: 4px; }
+
 /* Versienummer, klein rechtsonder (zie version.js). */
 .app-version {
   position: fixed; right: 8px; bottom: calc(var(--safe-b) + 3px); z-index: 6;
