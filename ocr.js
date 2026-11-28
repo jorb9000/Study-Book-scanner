@@ -226,28 +226,6 @@ function reorder(lines) {
     m.y0 = Math.min(m.y0, l.y0); m.y1 = Math.max(m.y1, l.y1);
   }
   const yc = (l) => l.y0 + l.y1;
-  // Binnen één kolom staat op elke hoogte maar één regel: stukken op dezelfde hoogte (bv. door een
-  // lichtvlek van de lamp ver uit elkaar) worden van links naar rechts één regel.
-  const rowsOf = (ls) => {
-    const rows = [];
-    for (const l of [...ls].sort((a, b) => yc(a) - yc(b))) {
-      const r = rows[rows.length - 1];
-      if (r && vOverlap(r, l) > 0.5 * Math.min(r.y1 - r.y0, l.y1 - l.y0)) r.parts.push(l), r.y0 = Math.min(r.y0, l.y0), r.y1 = Math.max(r.y1, l.y1);
-      else rows.push({ parts: [l], y0: l.y0, y1: l.y1 });
-    }
-    return rows.map(({ parts }) => {
-      if (parts.length === 1) return parts[0];
-      parts.sort((a, b) => a.x0 - b.x0);
-      const m = { ...parts[parts.reduce((bi, p, i) => (p.words > parts[bi].words ? i : bi), 0)] };
-      m.text = parts.map(p => p.text).join(' ');
-      m.styled = parts.map(p => p.styled ?? p.text).join(' ');
-      m.words = parts.reduce((n, p) => n + p.words, 0);
-      m.conf = parts.reduce((n, p) => n + p.conf * p.words, 0) / m.words;
-      m.x0 = parts[0].x0; m.x1 = Math.max(...parts.map(p => p.x1));
-      m.y0 = Math.min(...parts.map(p => p.y0)); m.y1 = Math.max(...parts.map(p => p.y1));
-      return m;
-    });
-  };
   if (gaps.length) {
     if (globalThis.__dbg) console.log('[ocr] kolommen', gaps.map(g => `${Math.round(g.a)}-${Math.round(g.b)}`).join(' '));
     // Regels over de volle breedte (koppen) delen de pagina in banden; per band kolom voor kolom.
@@ -259,7 +237,7 @@ function reorder(lines) {
       const top = k ? yc(span[k - 1]) : -Infinity, bottom = k < span.length ? yc(span[k]) : Infinity;
       let first = true;
       for (let c = 0; c <= gaps.length; c++) {
-        const col = rowsOf(inCols.filter(l => colOf(l) === c && yc(l) > top && yc(l) <= bottom));
+        const col = inCols.filter(l => colOf(l) === c && yc(l) > top && yc(l) <= bottom).sort((a, b) => yc(a) - yc(b));
         col.forEach((l, i) => { l.block = `k${band}-${c}`; l.newCol = i === 0 && !first; });
         if (col.length) first = false;
         res.push(...col);
@@ -916,26 +894,6 @@ export const ocr = {
     const confidence = Math.round(pages.reduce((s, p) => s + p.confidence, 0) / pages.length);
     console.debug('[ocr]', prep.steps.join(', ') || 'geen voorbewerking', `${confidence}%`);
     return { text, confidence, steps: prep.steps, pages, image, rotated: deg };
-  },
-  /** Alleen voorbewerken, zonder herkenning (voor de Claude-modus): de juiste kant boven, pagina
-      rechtzetten en bij een open boek in tweeën knippen. Per pagina een rechtgezette kleurenfoto
-      van hoogstens maxSide pixels en maxPixels beeldpunten. */
-  async preparePages(blob, lang, { maxSide = 2400, maxPixels = 3.6e6 } = {}) {
-    const deg = await this.orientation(blob, lang);
-    let image = null;
-    if (deg) { image = await resizeToBlob(blob, ocrConfig.maxSide, 0.92, deg); blob = image; }
-    const prep = await prepareForOcr(blob);
-    if (deg) prep.steps.unshift(`gedraaid ${deg}°`);
-    const pages = [];
-    for (const pp of prep.pages) {
-      const { W, H } = pp.gray;
-      const sc = Math.min(1, maxSide / Math.max(W, H), Math.sqrt(maxPixels / (W * H)));
-      const scan = pp.src
-        ? await canvasToJpeg(cropColor(pp.src, pp.backCrop, { x0: 0, y0: 0, x1: W, y1: H }, sc), 0.88)
-        : await resizeToBlob(blob, Math.round(Math.max(W, H) * sc), 0.88);
-      pages.push({ scan });
-    }
-    return { pages, steps: prep.steps, image, rotated: deg };
   },
   async recognizePage(w, prep, steps, onProgress, manual = null) {
     // Grote beginletters los herkennen, als één hoofdletter.
