@@ -128,6 +128,16 @@ try {
   check(!await desk.locator('#text-wrap').isVisible(), 'geen leeg tekstvak tijdens herkennen');
   await desk.waitForSelector('#text-wrap:not([hidden])', { timeout: 180000 });
   check((await desk.inputValue('#text')).length > 50, 'tekst herkend');
+  // Twijfelwoorden: gemarkeerd achter het tekstvak, en met Volgende selecteer je het eerste.
+  const nMarks = await desk.locator('.doubt-back mark').count();
+  if (nMarks) {
+    await desk.locator('.doubt-next').first().click();
+    await desk.waitForTimeout(400);
+    const sel = await desk.evaluate(() => { const t = document.querySelector('#text'); return t.value.slice(t.selectionStart, t.selectionEnd); });
+    const first = await desk.locator('.doubt-back mark').first().innerText();
+    check(sel === first, `twijfelwoorden gemarkeerd (${nMarks}), Volgende selecteert "${sel}"`);
+    await desk.screenshot({ path: join(out, 'flow-twijfel.png') });
+  } else check(true, 'geen twijfelwoorden op deze opname');
   await desk.click('[data-act=rotate]');
   await desk.waitForSelector('#text-wrap:not([hidden])', { timeout: 180000 });
   check((await desk.inputValue('#text')).length > 50, 'na Draaien opnieuw herkend');

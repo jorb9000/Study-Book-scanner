@@ -54,15 +54,15 @@ function align(ref, hyp) {
     d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (ref[i - 1] === hyp[j - 1] ? 0 : 1));
   }
   // Terugzoeken voor de foutenlijst.
-  const errs = []; let i = n, j = m;
+  const errs = [], bad = []; let i = n, j = m;
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && d[i][j] === d[i - 1][j - 1] + (ref[i - 1] === hyp[j - 1] ? 0 : 1)) {
-      if (ref[i - 1] !== hyp[j - 1]) errs.push(`${ref[i - 1]} → ${hyp[j - 1]}`);
+      if (ref[i - 1] !== hyp[j - 1]) { errs.push(`${ref[i - 1]} → ${hyp[j - 1]}`); bad.push(hyp[j - 1]); }
       i--; j--;
     } else if (i > 0 && d[i][j] === d[i - 1][j] + 1) { errs.push(`${ref[i - 1]} → (weg)`); i--; }
-    else { errs.push(`(extra) → ${hyp[j - 1]}`); j--; }
+    else { errs.push(`(extra) → ${hyp[j - 1]}`); bad.push(hyp[j - 1]); j--; }
   }
-  return { dist: d[n][m], errs: errs.reverse() };
+  return { dist: d[n][m], errs: errs.reverse(), bad };
 }
 
 const browser = await chromium.launch();
@@ -72,9 +72,10 @@ await page.goto(`http://localhost:${port}/tests/ocr-test.html`);
 await page.waitForFunction(() => window.ready);
 if (process.env.DBG) await page.evaluate(() => { globalThis.__dbg = true; });
 await page.evaluate((c) => window.setConfig(c), { maxSide: +(process.env.MAXSIDE || 4096), ...(process.env.CFG ? JSON.parse(process.env.CFG) : {}) });
+if (process.env.DOUBT) await page.evaluate(async (g) => { const m = await import("/ocr.js"); Object.assign(m.DOUBT, g); }, JSON.parse(process.env.DOUBT));
 
 if (process.env.RECHT) await page.evaluate(() => { window.recht = true; });
-let totWords = 0, totErr = 0, totMs = 0;
+let totWords = 0, totErr = 0, totMs = 0, dBad = 0, dCaught = 0, dFlag = 0, dRight = 0;
 const fixtures = await readdir(join(root, 'tests/fixtures'));
 for (const name of names) {
   const file = fixtures.find(f => f.replace(/\.\w+$/, '') === name);
@@ -85,14 +86,24 @@ for (const name of names) {
   for (const [pi, ref] of Object.entries(refs[name] || {})) {
     const got = pages[pi - 1] ?? (pages.length === 1 ? pages[0] : '');
     const r = words(ref), h = words(got);
-    const { dist, errs } = align(r, h);
+    const { dist, errs, bad } = align(r, h);
+    // Twijfelwoorden: hoeveel van de foute woorden de app markeert, en hoeveel markeringen echt fout zijn.
+    const allD = res.pages?.[pi - 1]?.doubts || [];
+    if (process.env.DOUBT_ALL) { const info = new Map(); for (const d of allD) for (const q of words(d.word)) if (!info.has(q)) info.set(q, d); console.log('     fout:', bad.map(b => { const d = info.get(b); return d ? `${b}[${d.conf}${d.known ? '' : ',?'}${d.doubt ? ',T' : ''}]` : `${b}[-]`; }).join(' ')); }
+    const flagged = allD.filter(d => d.doubt !== false).flatMap(d => words(d.word));
+    const badLeft = [...bad];
+    for (const f of flagged) { const k = badLeft.indexOf(f); if (k >= 0) { badLeft.splice(k, 1); dRight++; } }
+    if (process.env.DOUBT_ALL) { const b2 = [...bad]; console.log('     vals alarm:', allD.filter(d => d.doubt).filter(d => { const q = words(d.word)[0]; const k = b2.indexOf(q); if (k >= 0) { b2.splice(k, 1); return false; } return true; }).map(d => `${d.word}[${d.conf}${d.known ? '' : ',?'}]`).join(' ')); }
+    dBad += bad.length; dCaught += bad.length - badLeft.length; dFlag += flagged.length;
     totWords += r.length; totErr += dist;
     const acc = Math.max(0, 100 * (1 - dist / r.length));
-    console.log(`${name} p${pi}: ${acc.toFixed(1)}%  (${dist} fouten op ${r.length} woorden)`);
+    console.log(`${name} p${pi}: ${acc.toFixed(1)}%  (${dist} fouten op ${r.length} woorden)${flagged.length || bad.length ? `, twijfel ${flagged.length} (${bad.length - badLeft.length} van ${bad.length} fouten)` : ''}`);
+    if (process.env.SHOW && flagged.length) console.log('     twijfel: ' + flagged.join(' '));
     if (process.env.SHOW) console.log('     ' + errs.join(' | '));
   }
   console.log(`  ${res.ms} ms${process.env.RECHT ? (await page.evaluate(() => window.lastRecht) ? ', rechtgezet' : ', niet rechtgezet') : ''}`);
 }
 console.log(`TOTAAL: ${(100 * (1 - totErr / totWords)).toFixed(2)}%  (${totErr} fouten op ${totWords} woorden, ${Math.round(totMs / 1000)} s)`);
+if (dBad || dFlag) console.log(`TWIJFELWOORDEN: ${dFlag} gemarkeerd (${(100 * dRight / Math.max(1, dFlag)).toFixed(0)}% echt fout), ${dCaught} van ${dBad} foute woorden gemarkeerd (${(100 * dCaught / Math.max(1, dBad)).toFixed(0)}%)`);
 await browser.close();
 server.close();

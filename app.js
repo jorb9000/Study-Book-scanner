@@ -7,6 +7,7 @@ import { grayFromCanvas, findBookBox } from './scan.js';
 import { findTextQuad, plan, warpRGBA, MIN_DEV } from './perspective.js';
 import { figureRefs, removeFigureRef } from './figures.js';
 import { figureStrip, editFigures, applyBoxes, boxesInText } from './figure-ui.js';
+import { attachDoubts } from './doubt-ui.js';
 import { resolveFigures, makeZip, printMarkdown } from './export.js';
 
 // Op de computer foto's minder verkleinen: 4K-opnames van de lamp blijven dan scherp genoeg.
@@ -627,8 +628,12 @@ async function viewReview(id) {
     if (two) { ta2.value = draft.text2; pageLabels(); }
     autosize();
     showFigs();
+    dz0.render(); dz1.render();
     setButtons(true);
   };
+  // Twijfelwoorden markeren (alleen zolang de tekst bij deze herkenning hoort).
+  const dz0 = attachDoubts(ta, () => draft.figs?.[0]?.doubts || [], () => draft.figs?.[0]?.scan || null);
+  const dz1 = attachDoubts(ta2, () => (isSpread() ? draft.figs?.[1]?.doubts || [] : []), () => draft.figs?.[1]?.scan || null);
   // Beelden onder elk tekstvak (miniaturen, weghalen, kaders aanpassen).
   const showFigs = () => {
     const two = isSpread();
@@ -873,7 +878,7 @@ const resultFields = (res) => ({
   turned: res.image || null,
   deg: res.rotated || 0,
   // Per pagina: de rechtgezette pagina (om kaders aan te passen), de beelden en de herkende tekst.
-  figs: (res.pages || []).map(p => ({ scan: p.scan || null, figures: p.figures || [], text: p.text })),
+  figs: (res.pages || []).map(p => ({ scan: p.scan || null, figures: p.figures || [], text: p.text, doubts: p.doubts || [] })),
 });
 
 /** Herkent het concept van een boek opnieuw (met voorrang: je zit erop te wachten). */
