@@ -238,6 +238,14 @@ const WIDE = matchMedia('(min-width: 760px) and (pointer: fine)');
 
 function render(html) {
   app.innerHTML = html;
+  // Versienummer op elke pagina in de kopregel, naast de terugknop (het beginscherm heeft het al naast de naam).
+  const top = app.querySelector('.top');
+  if (top && !top.querySelector('.wordmark-ver')) {
+    const v = document.createElement('span');
+    v.className = 'top-ver';
+    v.textContent = self.APP_VERSION || '';
+    if (top.firstElementChild) top.firstElementChild.after(v); else top.append(v);
+  }
   app.firstElementChild?.classList.add('enter');
   if (WIDE.matches) placeDock();
 }
