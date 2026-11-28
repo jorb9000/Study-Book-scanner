@@ -149,7 +149,7 @@ function collectLines(blocks) {
     if (conf < 50 || (w.length <= 2 && conf < 70 && !isPageNum(text))) { if (globalThis.__dbg) console.log('[ocr] weg', Math.round(conf), text.slice(0, 80)); continue; }
     if (letters === 0 && !isPageNum(text)) continue;
     lines.push({
-      text, styled, block: bi, conf, size: rh, words: w.length, bullet,
+      text, styled, block: bi, conf, size: rh, words: w.length, bullet, ws: w,
       x0: w[0].bbox.x0, x1: w[w.length - 1].bbox.x1,
       y0: Math.min(...w.map(x => x.bbox.y0)), y1: Math.max(...w.map(x => x.bbox.y1)),
     });
@@ -164,7 +164,20 @@ function collectLines(blocks) {
 /** Zoekt tekstkolommen: stroken die geen enkele regel (op een enkele kop na) oversteekt.
     Geeft de tussenruimtes terug als [{ a, b }] (van links naar rechts), leeg bij één kolom. */
 function findColumnGaps(lines, size) {
-  const ls = lines.filter(l => l.words >= 2 && /\p{L}/u.test(l.text));
+  // Tel per stuk regel tussen grote woordtussenruimtes: Tesseract plakt regels van twee kolommen
+  // soms aan elkaar, en dan zou de kolomruimte vol lijken.
+  const segs = !size ? lines : lines.flatMap(l => {
+    const w = l.ws;
+    if (!w || w.length < 2) return [l];
+    const out = []; let s = 0;
+    for (let i = 1; i <= w.length; i++) {
+      if (i < w.length && w[i].bbox.x0 - w[i - 1].bbox.x1 <= size * 1.0) continue;
+      const p = w.slice(s, i); s = i;
+      out.push({ x0: p[0].bbox.x0, x1: p[p.length - 1].bbox.x1, words: p.length, text: p.map(x => x.text).join(' ') });
+    }
+    return out;
+  });
+  const ls = segs.filter(l => l.words >= 2 && /\p{L}/u.test(l.text));
   if (ls.length < 6 || !size) return [];
   const minX = Math.min(...ls.map(l => l.x0)), maxX = Math.max(...ls.map(l => l.x1));
   const bin = Math.max(2, size / 4), n = Math.ceil((maxX - minX) / bin) + 1;
@@ -192,14 +205,45 @@ function findColumnGaps(lines, size) {
     verschillende blokken, waardoor de volgorde niet meer klopt. Stukken op dezelfde hoogte in dezelfde
     kolom worden weer één regel. Bij één tekstkolom komen de regels daarna van boven naar beneden; bij
     meer kolommen kolom voor kolom, met koppen die over meer kolommen lopen ertussen. */
+function splitAtGaps(l, gaps) {
+  const w = l.ws;
+  if (!w || w.length < 2) return [l];
+  const cuts = [];
+  for (let i = 0; i + 1 < w.length; i++) {
+    const a = w[i].bbox.x1, b = w[i + 1].bbox.x0;
+    if (gaps.some(g => a <= (g.a + g.b) / 2 && b >= (g.a + g.b) / 2)) cuts.push(i + 1);
+  }
+  if (!cuts.length) return [l];
+  const parts = [];
+  let s = 0;
+  for (const c of [...cuts, w.length]) {
+    const p = w.slice(s, c); s = c;
+    if (!p.length) continue;
+    const text = p.map(x => x.text).join(' ');
+    parts.push({
+      ...l, ws: p, text, styled: styleWords(p), words: p.length,
+      conf: p.reduce((a, x) => a + x.confidence, 0) / p.length,
+      bullet: l.bullet && !parts.length,
+      x0: p[0].bbox.x0, x1: p[p.length - 1].bbox.x1,
+      y0: Math.min(...p.map(x => x.bbox.y0)), y1: Math.max(...p.map(x => x.bbox.y1)),
+    });
+  }
+  if (globalThis.__dbg) console.log('[ocr] regel geknipt bij kolom:', parts.map(p => p.text.slice(0, 30)).join(' | '));
+  return parts;
+}
+
 function reorder(lines) {
   if (lines.length < 3) return lines;
   const size = median(lines.filter(l => l.words >= 4).map(l => l.size));
   const gaps = findColumnGaps(lines, size);
+  // Tesseract leest bij een smalle ruimte tussen twee kolommen soms één regel dwars over beide
+  // kolommen. Die regel knippen we op de plek waar een woordtussenruimte over de kolomruimte valt.
+  if (gaps.length) lines = lines.flatMap(l => splitAtGaps(l, gaps));
   // Kolom van een regel, of -1 als hij over een tussenruimte heen loopt (of geen letters heeft).
   const colOf = (l) => {
-    if (!/\p{L}/u.test(l.text)) return -1;
     let c = 0;
+    // Zonder letters (paginanummer, vlekje): bij de kolom waar het midden staat, nooit over de volle breedte.
+    if (!/\p{L}/u.test(l.text)) { for (const g of gaps) if ((l.x0 + l.x1) / 2 >= (g.a + g.b) / 2) c++; return c; }
     for (const g of gaps) { if (l.x0 < g.a && l.x1 > g.b) return -1; if (l.x0 >= (g.a + g.b) / 2) c++; }
     return c;
   };
@@ -587,7 +631,9 @@ async function grayOf(blob) {
 /** Maakt de foto klaar voor herkenning: pagina rechtzetten, belichting, scheefstand, kromming,
     kaderlijnen en grote beginletters. Staan er twee pagina's op (open boek), dan wordt de foto
     bij de rug in tweeën geknipt. Geeft { pages: [...], steps, canvas } terug. */
-export async function prepareForOcr(blob) {
+/** opts.spine: waar de rug ongeveer zit, als deel (0–1) van de breedte van de foto;
+    opts.spineHand: door jou aangewezen (geldt dan ook als er daar niets te zien is). */
+export async function prepareForOcr(blob, opts = {}) {
   let img = await grayOf(blob);
   const src = img.src;
   const steps = [];
@@ -600,6 +646,7 @@ export async function prepareForOcr(blob) {
   img = normalizeLight(img);
   // Twee pagina's? Eerst het geheel rechtzetten, dan de rug zoeken.
   let halves = [[img, photo, []]];
+  let spine = null;   // waar de rug gevonden is (deel van de breedte), om terug te geven
   // Veel omgeving in beeld (lampopstelling: bureau, lampkap, hand)? Dan zoeken we de scheefstand
   // en de rug alleen binnen het boek. Anders kan de rand van de lampkap voor de rug worden
   // aangezien, en trekt de lampkap de scheefstand scheef. Er wordt niets weggeknipt.
@@ -614,13 +661,17 @@ export async function prepareForOcr(blob) {
   }
   const inBook = (im) => (x0 > 0 || x1 < im.W ? cropX(im, x0, x1) : im);
   const book = inBook(img);
-  if (book.W > book.H * 1.1) {
+  // Liggend boek: breder dan hoog. Een klein boek met veel omgeving erboven en eronder kan een bijna
+  // vierkant beeld geven; dan zoeken we ook, maar accepteren we alleen een duidelijke rug.
+  if (book.W > book.H * 0.9) {
     const a = estimateSkew(book);
     const straight = Math.abs(a) >= 0.3 ? rotate(img, a) : img;
     const sp = Math.abs(a) >= 0.3 ? rotate(photo, a) : photo;
-    const inner = findGutter(inBook(straight), inBook(sp));
+    const hint = !quad && opts.spine > 0 && opts.spine < 1 ? opts.spine * img.W - x0 : null;
+    const inner = findGutter(inBook(straight), inBook(sp), true, hint, !!opts.spineHand);
     if (inner) {
       const gx = x0 + inner;
+      if (!quad) spine = gx / img.W;
       const rot = Math.abs(a) >= 0.3 ? straight.back : null;
       const L = cropX(straight, 0, gx), R = cropX(straight, gx, straight.W);
       halves = [[L, cropX(sp, 0, gx), [rot, L.back]], [R, cropX(sp, gx, sp.W), [rot, R.back]]];
@@ -628,7 +679,7 @@ export async function prepareForOcr(blob) {
     }
   }
   const pages = halves.map(([g, p, ch], i) => preparePage(g, p, steps, halves.length > 1 ? (i ? 'left' : 'right') : false, [...base, ...ch], src));
-  return { pages, steps, canvas: pages[0].canvas };
+  return { pages, steps, canvas: pages[0].canvas, spine };
 }
 
 // half: false bij één pagina, anders de kant van de rug ('left' of 'right').
@@ -861,7 +912,9 @@ export const ocr = {
     const deg = await this.orientation(blob, lang);
     let image = null;
     if (deg) { image = await resizeToBlob(blob, ocrConfig.maxSide, 0.92, deg); blob = image; }
-    const prep = await prepareForOcr(blob);
+    // De rug-aanwijzing hoort bij de foto zoals hij binnenkwam; bij een kwartslag klopt hij niet meer.
+    const flip = (x) => (x == null ? null : deg === 180 ? 1 - x : deg ? null : x);
+    const prep = await prepareForOcr(blob, { spine: flip(opts.spine), spineHand: opts.spineHand });
     if (deg) prep.steps.unshift(`gedraaid ${deg}°`);
     const pages = [];
     for (let i = 0; i < prep.pages.length; i++) {
@@ -893,7 +946,7 @@ export const ocr = {
     const text = pages.map(p => p.text).join('\n\n');
     const confidence = Math.round(pages.reduce((s, p) => s + p.confidence, 0) / pages.length);
     console.debug('[ocr]', prep.steps.join(', ') || 'geen voorbewerking', `${confidence}%`);
-    return { text, confidence, steps: prep.steps, pages, image, rotated: deg };
+    return { text, confidence, steps: prep.steps, pages, image, rotated: deg, spine: flip(prep.spine) };
   },
   async recognizePage(w, prep, steps, onProgress, manual = null) {
     // Grote beginletters los herkennen, als één hoofdletter.

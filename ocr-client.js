@@ -81,7 +81,9 @@ export const ocrQueue = {
   get maxSide() { return maxSide; },
   setMaxSide(n) { maxSide = n; configured = null; },
   /** Herkent een foto. priority > 0: vóór het achtergrondwerk. */
-  recognize: (blob, lang, opts = {}) => enqueue('recognize', [blob, lang, opts.figures ? { figures: opts.figures } : {}], opts),
+  recognize: (blob, lang, opts = {}) => enqueue('recognize', [blob, lang, {
+    ...(opts.figures ? { figures: opts.figures } : {}), ...(opts.spine != null ? { spine: opts.spine, spineHand: !!opts.spineHand } : {}),
+  }], opts),
   /** Verkleinen/draaien zonder de pagina te belasten; gaat niet in de wachtrij. */
   resize: (blob, maxSide, quality, rotate) => run('resize', [blob, maxSide, quality, rotate]),
   warm: () => start(),

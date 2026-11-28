@@ -888,12 +888,14 @@ function recognizeDraft(bookId, lang, draft, figures = null) {
       if (d && d.createdAt === draft.createdAt) {
         d.job = key; d.text = null; d.text2 = null;
         await db.put('drafts', d);
-        res = await ocrQueue.recognize(d.image, lang, { priority: 1, onProgress: progressOf_(key), figures });
+        // De rug van het boek geldt voor de foto zoals de iPhone hem stuurde, niet voor een gedraaide.
+        const sp = d.fromLamp && !d.turned && !d.rotate ? (await db.get('books', bookId))?.spine : null;
+        res = await ocrQueue.recognize(d.image, lang, { priority: 1, onProgress: progressOf_(key), figures, spine: sp?.x ?? null, spineHand: !!sp?.hand });
       }
     } catch (err) { console.error(err); }
     const cur = await db.get('drafts', bookId);
     if (cur && cur.job === key) {
-      if (res) { const f = resultFields(res); Object.assign(cur, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || cur.image, figs: f.figs }); }
+      if (res) { const f = resultFields(res); Object.assign(cur, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || cur.image, figs: f.figs, turned: cur.turned || !!f.turned }); }
       cur.job = null;
       await db.put('drafts', cur);
     }
@@ -961,8 +963,11 @@ const bg = {
     activeJobs.set(key, { key, pct: 0 });
     bus.emit({ key, type: 'start' });
     let res = null;
-    try { res = await ocrQueue.recognize(s.image, book.lang, { onProgress: progressOf_(key) }); }
+    // De rug van dit boek (door jou aangewezen of uit eerdere opnames): de iPhone hangt vast, dus
+    // de rug ligt bij elke opname ongeveer op dezelfde plek.
+    try { res = await ocrQueue.recognize(s.image, book.lang, { onProgress: progressOf_(key), spine: book.spine?.x ?? null, spineHand: !!book.spine?.hand }); }
     catch (err) { console.error(err); }
+    if (res && res.spine != null) await noteSpine(s.bookId, res.spine);
     const done = () => { activeJobs.delete(key); this.current = null; bus.emit({ key, type: 'done' }); };
     const f = res && resultFields(res);
     if (!await shots.get(s.id)) {
@@ -987,6 +992,16 @@ const bg = {
     done();
   },
 };
+
+/** Onthoudt waar de rug gevonden is, zolang je hem niet zelf hebt aangewezen. */
+async function noteSpine(bookId, x) {
+  const b = await db.get('books', bookId);
+  if (!b || b.spine?.hand) return;
+  if (b.spine && Math.abs(b.spine.x - x) < 0.003) return;
+  b.spine = { x, hand: false };
+  await db.put('books', b);
+  bus.emit({ key: `spine:${bookId}`, type: 'spine' });
+}
 
 /** Opnames van de lamp die bij dit boek horen, op volgorde van opname. */
 async function inboxOf(bookId) {
@@ -1059,7 +1074,7 @@ async function takeFromInbox(bookId, shotId = null) {
     confidence: done ? s.confidence : null,
     figs: done ? (s.figs || null) : null,
     shotId: s.id, job: !done && activeJobs.has(key) ? key : null,
-    rotate: 0, createdAt: Date.now(), fromLamp: true,
+    rotate: 0, createdAt: Date.now(), fromLamp: true, turned: !!(done && s.rotated),
   });
   await shots.del(s.id);
   return true;
@@ -1153,7 +1168,7 @@ async function viewDesk(id) {
             <button class="btn btn-quiet btn-auto" data-act="auto" id="auto" disabled title="Neemt vanzelf op zodra je het boek stilhoudt">Start automatisch opnemen <kbd>A</kbd></button>
             <button class="btn btn-primary" data-act="shoot" id="shoot" disabled>Opnemen <kbd>spatie</kbd></button>
           </div>
-          <p class="muted small" id="desk-hint">Leg eerst het boek goed onder de camera en zoom eventueel in. Klik dan op <strong>Start automatisch opnemen</strong>: daarna neemt de iPhone vanzelf op als je omslaat en stilhoudt. Of druk zelf op de spatiebalk.</p>
+          <p class="muted small" id="desk-hint">Leg eerst het boek goed onder de camera en zoom eventueel in. Staat de lijn <em>rug</em> niet op de rug van het boek, sleep hem er dan naartoe. Klik daarna op <strong>Start automatisch opnemen</strong>: daarna neemt de iPhone vanzelf op als je omslaat en stilhoudt. Of druk zelf op de spatiebalk.</p>
         </div>
 
         <aside class="desk-side">
@@ -1256,7 +1271,76 @@ async function viewDesk(id) {
     g.rotate((deg * Math.PI) / 180);
     g.drawImage(bmp, src.x, src.y, src.w, src.h, -w / 2, -h / 2, w, h);
     g.restore();
+    view = { bw: bmp.width, src, scale, deg, cw: c.width, ch: c.height };
+    drawSpine(g);
   }
+  /* De rug als lijn in het live beeld. Gevonden in de opnames (stippellijn) of door jou versleept
+     (doorgetrokken). Geldt voor de foto zoals de iPhone hem stuurt; bij een kwartslag of rechtzetten
+     laten we hem weg, want dan loopt de rug niet meer van boven naar beneden in de foto. */
+  let spine = book.spine ? { ...book.spine } : null;
+  let view = null, dragging = false;
+  const spineOk = () => view && !(fixOn && fixQuad) && view.deg % 180 === 0;
+  const toCanvas = (xf) => { let X = (xf * view.bw - view.src.x) * view.scale; return view.deg === 180 ? view.cw - X : X; };
+  const toRaw = (X) => { if (view.deg === 180) X = view.cw - X; return (X / view.scale + view.src.x) / view.bw; };
+  function drawSpine(g) {
+    if (!spineOk()) return;
+    const X = toCanvas(spine ? spine.x : 0.5);
+    if (X < 0 || X > view.cw) return;
+    const lw = Math.max(2, view.cw / 500);
+    g.save();
+    g.lineWidth = lw * (dragging ? 1.6 : 1);
+    g.strokeStyle = spine?.hand ? 'rgba(255,140,0,0.95)' : spine ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.45)';
+    g.shadowColor = 'rgba(0,0,0,0.6)'; g.shadowBlur = lw * 2;
+    if (!spine?.hand) g.setLineDash([lw * 6, lw * 4]);
+    g.beginPath(); g.moveTo(X, 0); g.lineTo(X, view.ch); g.stroke();
+    g.setLineDash([]);
+    g.font = `600 ${Math.round(lw * 9)}px system-ui, sans-serif`;
+    g.fillStyle = g.strokeStyle;
+    g.textAlign = 'center';
+    g.fillText(spine?.hand ? 'rug (vast)' : spine ? 'rug' : 'rug?', X, lw * 12);
+    g.restore();
+  }
+  const liveX = (e) => { const c = $('#live'), r = c.getBoundingClientRect(); return [(e.clientX - r.left) * c.width / r.width, c.width / r.width]; };
+  const nearSpine = (e) => {
+    if (!spineOk()) return false;
+    const [X, k] = liveX(e);
+    return Math.abs(X - toCanvas(spine ? spine.x : 0.5)) <= 16 * k;
+  };
+  async function saveSpine(next) {
+    spine = next;
+    const b = await db.get('books', id);
+    if (!b) return;
+    b.spine = next;
+    await db.put('books', b);
+  }
+  const liveEl = $('#live');
+  liveEl.addEventListener('pointerdown', (e) => {
+    if (!nearSpine(e)) return;
+    dragging = true;
+    liveEl.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  liveEl.addEventListener('pointermove', (e) => {
+    if (!dragging) { liveEl.style.cursor = nearSpine(e) ? 'col-resize' : ''; return; }
+    const x = Math.min(0.95, Math.max(0.05, toRaw(liveX(e)[0])));
+    spine = { x, hand: true };
+    if (lastView) drawFrame(lastView);
+  });
+  const endDrag = async () => {
+    if (!dragging) return;
+    dragging = false;
+    await saveSpine(spine);
+    if (lastView) drawFrame(lastView);
+    toast('Rug vastgezet. Dubbelklik op de lijn om hem weer zelf te laten zoeken.');
+  };
+  liveEl.addEventListener('pointerup', endDrag);
+  liveEl.addEventListener('pointercancel', endDrag);
+  liveEl.addEventListener('dblclick', async (e) => {
+    if (!nearSpine(e) || !spine?.hand) return;
+    await saveSpine({ x: spine.x, hand: false });
+    if (lastView) drawFrame(lastView);
+    toast('De rug wordt weer in elke opname gezocht');
+  });
   const linkState = $('#link-state'), camState = $('#cam-state');
 
   const setLinked = (on) => {
@@ -1273,7 +1357,7 @@ async function viewDesk(id) {
     b.classList.toggle('btn-on', on);
     $('#desk-hint').innerHTML = on
       ? 'Automatisch opnemen staat aan: blader om en houd stil, de iPhone neemt vanzelf op. Of druk op de spatiebalk.'
-      : 'Leg eerst het boek goed onder de camera en zoom eventueel in. Klik dan op <strong>Start automatisch opnemen</strong>: daarna neemt de iPhone vanzelf op als je omslaat en stilhoudt. Of druk zelf op de spatiebalk.';
+      : 'Leg eerst het boek goed onder de camera en zoom eventueel in. Staat de lijn <em>rug</em> niet op de rug van het boek, sleep hem er dan naartoe. Klik daarna op <strong>Start automatisch opnemen</strong>: daarna neemt de iPhone vanzelf op als je omslaat en stilhoudt. Of druk zelf op de spatiebalk.';
   };
 
   const d = ensureDesk(id);
@@ -1428,6 +1512,10 @@ async function viewDesk(id) {
   const offBus = bus.on((ev) => {
     if (!alive) return;
     if (ev.type === 'turn') { if (lastView) drawFrame(lastView); return; }
+    if (ev.type === 'spine') {
+      if (ev.key === `spine:${id}` && !dragging) db.get('books', id).then(b => { if (alive && b) { spine = b.spine ? { ...b.spine } : null; if (lastView) drawFrame(lastView); } });
+      return;
+    }
     if (ev.type === 'progress') {
       const el = document.querySelector(`[data-prog="${ev.key.slice(5)}"]`);
       if (el) el.textContent = ev.pct + '%';
