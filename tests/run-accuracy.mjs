@@ -1,6 +1,7 @@
 // Meet de woordnauwkeurigheid van de herkenning tegen handmatig nagekeken referentietekst.
 // Gebruik (vanuit de hoofdmap):  node tests/run-accuracy.mjs [naam ...]
 //   MAXSIDE=4096   grootste zijde waarmee een foto wordt herkend (standaard 4096, zoals op de computer)
+//   RECHT=1        eerst het perspectief rechtzetten (perspective.js), zoals de knop Rechtzetten
 //   SHOW=1         toon per pagina de fouten (verwacht → gelezen)
 //
 // Referenties staan in tests/fixtures/referentie/<foto>-<pagina>.txt (pagina 1 = links, 2 = rechts).
@@ -72,6 +73,7 @@ await page.waitForFunction(() => window.ready);
 if (process.env.DBG) await page.evaluate(() => { globalThis.__dbg = true; });
 await page.evaluate((c) => window.setConfig(c), { maxSide: +(process.env.MAXSIDE || 4096), ...(process.env.CFG ? JSON.parse(process.env.CFG) : {}) });
 
+if (process.env.RECHT) await page.evaluate(() => { window.recht = true; });
 let totWords = 0, totErr = 0, totMs = 0;
 const fixtures = await readdir(join(root, 'tests/fixtures'));
 for (const name of names) {
@@ -89,7 +91,7 @@ for (const name of names) {
     console.log(`${name} p${pi}: ${acc.toFixed(1)}%  (${dist} fouten op ${r.length} woorden)`);
     if (process.env.SHOW) console.log('     ' + errs.join(' | '));
   }
-  console.log(`  ${res.ms} ms`);
+  console.log(`  ${res.ms} ms${process.env.RECHT ? (await page.evaluate(() => window.lastRecht) ? ', rechtgezet' : ', niet rechtgezet') : ''}`);
 }
 console.log(`TOTAAL: ${(100 * (1 - totErr / totWords)).toFixed(2)}%  (${totErr} fouten op ${totWords} woorden, ${Math.round(totMs / 1000)} s)`);
 await browser.close();

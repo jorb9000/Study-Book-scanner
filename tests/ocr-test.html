@@ -7,7 +7,14 @@
   import { ocr, prepareForOcr, resizeToBlob, ocrConfig } from '../ocr.js';
   window.setConfig = (c) => Object.assign(ocrConfig, c);
   window.runOcr = async (url, lang = 'nld') => {
-    const blob = await (await fetch(url)).blob();
+    let blob = await (await fetch(url)).blob();
+    // RECHT=1: eerst rechtzetten zoals de knop Rechtzetten op de computer doet.
+    if (window.recht) {
+      const { rectify } = await import('../perspective.js');
+      const c = rectify(await createImageBitmap(blob));
+      window.lastRecht = !!c;
+      if (c) blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    }
     const t = performance.now();
     let res;
     try { res = await ocr.recognize(blob, lang); }

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="nl"><head><meta charset="utf-8"><title>Rechtzetten-test</title></head>
+<body>
+<p>Testpagina voor het rechtzetten (perspective.js). Wordt gebruikt door <code>tests/run-perspective-test.mjs</code>.</p>
+<script type="module">
+  import { findTextQuad, rectify } from '../perspective.js';
+  const load = async (url) => createImageBitmap(await (await fetch(url)).blob());
+  // Hoeken op de foto tekenen, en het rechtgezette beeld. Beide als data-URL.
+  window.run = async (url, maxSide = 1000) => {
+    const bmp = await load(url);
+    const t = performance.now();
+    const found = findTextQuad(bmp, maxSide);
+    const tFind = performance.now() - t;
+    const k = Math.min(1, 1200 / Math.max(bmp.width, bmp.height));
+    const c = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * k), height: Math.round(bmp.height * k) });
+    const g = c.getContext('2d');
+    g.drawImage(bmp, 0, 0, c.width, c.height);
+    let rect = null, tWarp = 0;
+    if (found) {
+      g.strokeStyle = 'red'; g.lineWidth = 3; g.beginPath();
+      found.quad.forEach(([x, y], i) => (i ? g.lineTo(x * k, y * k) : g.moveTo(x * k, y * k)));
+      g.closePath(); g.stroke();
+      const t2 = performance.now();
+      const r = rectify(bmp, found);
+      tWarp = performance.now() - t2;
+      rect = r && r.toDataURL('image/jpeg', 0.85);
+    }
+    let dbg = null;
+    const D = globalThis.__dbgInfo;
+    if (D) {
+      const dc = Object.assign(document.createElement('canvas'), { width: D.W, height: D.H });
+      const x = dc.getContext('2d'), id = x.createImageData(D.W, D.H);
+      for (let i = 0; i < D.ink.length; i++) { const v = D.ink[i] ? 0 : 255; id.data.set([v, v, v, 255], i * 4); }
+      x.putImageData(id, 0, 0);
+      x.strokeStyle = 'blue'; x.strokeRect(D.box.x, D.box.y, D.box.w, D.box.h);
+      for (const [y, xx] of D.L) { x.fillStyle = 'red'; x.fillRect(xx - 3, y - 3, 6, 6); }
+      for (const [y, xx] of D.R) { x.fillStyle = 'green'; x.fillRect(xx - 3, y - 3, 6, 6); }
+      dbg = dc.toDataURL('image/png'); globalThis.__dbgInfo = null;
+    }
+    return { dbg, found, overlay: c.toDataURL('image/jpeg', 0.8), rect, tFind: Math.round(tFind), tWarp: Math.round(tWarp) };
+  };
+  window.ready = true;
+</script>
+</body></html>
