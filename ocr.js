@@ -895,6 +895,26 @@ export const ocr = {
     console.debug('[ocr]', prep.steps.join(', ') || 'geen voorbewerking', `${confidence}%`);
     return { text, confidence, steps: prep.steps, pages, image, rotated: deg };
   },
+  /** Alleen voorbewerken, zonder herkenning (voor de Claude-modus): de juiste kant boven, pagina
+      rechtzetten en bij een open boek in tweeën knippen. Per pagina een rechtgezette kleurenfoto
+      van hoogstens maxSide pixels en maxPixels beeldpunten. */
+  async preparePages(blob, lang, { maxSide = 2400, maxPixels = 3.6e6 } = {}) {
+    const deg = await this.orientation(blob, lang);
+    let image = null;
+    if (deg) { image = await resizeToBlob(blob, ocrConfig.maxSide, 0.92, deg); blob = image; }
+    const prep = await prepareForOcr(blob);
+    if (deg) prep.steps.unshift(`gedraaid ${deg}°`);
+    const pages = [];
+    for (const pp of prep.pages) {
+      const { W, H } = pp.gray;
+      const sc = Math.min(1, maxSide / Math.max(W, H), Math.sqrt(maxPixels / (W * H)));
+      const scan = pp.src
+        ? await canvasToJpeg(cropColor(pp.src, pp.backCrop, { x0: 0, y0: 0, x1: W, y1: H }, sc), 0.88)
+        : await resizeToBlob(blob, Math.round(Math.max(W, H) * sc), 0.88);
+      pages.push({ scan });
+    }
+    return { pages, steps: prep.steps, image, rotated: deg };
+  },
   async recognizePage(w, prep, steps, onProgress, manual = null) {
     // Grote beginletters los herkennen, als één hoofdletter.
     for (let i = 0; i < prep.dropCaps.length; i++) {

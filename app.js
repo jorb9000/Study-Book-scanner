@@ -8,6 +8,7 @@ import { findTextQuad, plan, warpRGBA, MIN_DEV } from './perspective.js';
 import { figureRefs, removeFigureRef } from './figures.js';
 import { figureStrip, editFigures, applyBoxes, boxesInText } from './figure-ui.js';
 import { resolveFigures, makeZip, printMarkdown } from './export.js';
+import { claudeSettings, MODELS, testKey, explain } from './claude.js';
 
 // Op de computer foto's minder verkleinen: 4K-opnames van de lamp blijven dan scherp genoeg.
 if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) ocrQueue.setMaxSide(4096);
@@ -648,6 +649,7 @@ async function viewReview(id) {
     if (draft.confidence == null) return;
     const c = draft.confidence;
     $('#conf').textContent = !draft.text && !draft.text2 ? 'Geen tekst gevonden. Probeer draaien of neem de pagina opnieuw op met meer licht.'
+      : draft.engine === 'claude' ? 'Gelezen door Claude. Lees de tekst even na.'
       : c >= 85 ? `Herkenning ${c}% zeker`
       : c >= 60 ? `Herkenning ${c}% zeker. Controleer de tekst goed.`
       : `Herkenning ${c}% zeker. Probeer een nieuwe opname: recht van boven, met meer licht.`;
@@ -775,7 +777,7 @@ async function viewReview(id) {
       const list = await editFigures(fg.scan, boxesInText(el2.value, fg.figures));
       if (!list || !alive) return;
       clearTimeout(ta._t); clearTimeout(ta2._t);
-      if (el2.value === fg.text) {
+      if (el2.value === fg.text && draft.engine !== 'claude') {
         // Tekst nog niet aangepast: opnieuw herkennen met deze kaders. Dan verdwijnen ook de woorden
         // uit de beelden uit de tekst, en wordt het bijschrift gevonden.
         const figures = draft.figs.map((g, j) => (j === i ? list.map(b => b.box) : boxesInText(j ? ta2.value : ta.value, g.figures).map(b => b.box)));
@@ -866,6 +868,7 @@ const resultFields = (res) => ({
   deg: res.rotated || 0,
   // Per pagina: de rechtgezette pagina (om kaders aan te passen), de beelden en de herkende tekst.
   figs: (res.pages || []).map(p => ({ scan: p.scan || null, figures: p.figures || [], text: p.text })),
+  engine: res.engine || 'tesseract',
 });
 
 /** Herkent het concept van een boek opnieuw (met voorrang: je zit erop te wachten). */
@@ -885,7 +888,7 @@ function recognizeDraft(bookId, lang, draft, figures = null) {
     } catch (err) { console.error(err); }
     const cur = await db.get('drafts', bookId);
     if (cur && cur.job === key) {
-      if (res) { const f = resultFields(res); Object.assign(cur, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || cur.image, figs: f.figs }); }
+      if (res) { const f = resultFields(res); Object.assign(cur, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || cur.image, figs: f.figs, engine: f.engine }); }
       cur.job = null;
       await db.put('drafts', cur);
     }
@@ -961,7 +964,7 @@ const bg = {
       // Intussen geopend in het nakijkscherm: het resultaat hoort nu bij het concept.
       const d = await db.get('drafts', s.bookId);
       if (d && d.job === key) {
-        if (f) Object.assign(d, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || d.image, figs: f.figs });
+        if (f) Object.assign(d, { text: f.text, text2: f.text2, confidence: f.confidence, image: f.turned || d.image, figs: f.figs, engine: f.engine });
         d.job = null;
         await db.put('drafts', d);
       }
@@ -974,7 +977,7 @@ const bg = {
       toast('Dubbele opname weggelaten: dezelfde pagina\'s als de vorige');
       return done();
     }
-    await patchShot(s.id, (x) => Object.assign(x, { status: 'done', confidence: f.confidence, rotated: f.turned, text: f.text, text2: f.text2, figs: f.figs }));
+    await patchShot(s.id, (x) => Object.assign(x, { status: 'done', confidence: f.confidence, rotated: f.turned, text: f.text, text2: f.text2, figs: f.figs, engine: f.engine }));
     if (f.confidence >= 60) lampTurn.auto(f.deg);
     done();
   },
@@ -1050,6 +1053,7 @@ async function takeFromInbox(bookId, shotId = null) {
     text2: done ? (s.text2 ?? null) : null,
     confidence: done ? s.confidence : null,
     figs: done ? (s.figs || null) : null,
+    engine: done ? (s.engine || null) : null,
     shotId: s.id, job: !done && activeJobs.has(key) ? key : null,
     rotate: 0, createdAt: Date.now(), fromLamp: true,
   });
@@ -1138,6 +1142,7 @@ async function viewDesk(id) {
             <span class="pill pill-warn" id="res-warn" hidden>camera levert geen 4K</span>
             <span class="pill" id="fix-state" hidden></span>
             <span class="pill" id="shot-count" hidden></span>
+            ${claudeSettings.active() ? '<a class="pill" href="#/backup" title="Opnames gaan naar Anthropic om de tekst te lezen. Wijzigen bij Back-up en instellingen.">Claude leest</a>' : ''}
             <span class="spacer"></span>
             <button class="btn btn-quiet" data-act="fix" id="fix" title="Schuin liggend boek rechtzetten, alsof het loodrecht onder de camera ligt (alleen in dit beeld)">Rechtzetten <kbd>S</kbd></button>
             <button class="btn btn-quiet" data-act="zoom" id="zoom" title="Inzoomen op het boek (alleen in dit beeld; de opname blijft het hele beeld)">Inzoomen <kbd>Z</kbd></button>
@@ -1740,10 +1745,12 @@ async function viewBackup() {
       </div>
       <p class="muted small">De back-up bevat alle teksten, hoofdstukken en voortgang, zonder foto's en beelden.</p>
       ${usage ? `<p class="muted small">${usage}${persisted ? ' · opslag beschermd' : ''}</p>` : ''}
+      ${PHONE ? '' : claudeSection()}
       <hr class="rule">
-      <p class="muted small">Boekscanner werkt offline. De tekstherkenning gebeurt op ${PHONE ? 'je telefoon' : 'je computer'}; er wordt niets verstuurd.</p>
+      <p class="muted small" id="privacy">${privacyText()}</p>
     </section>
   `);
+  if (!PHONE) wireClaude();
 
   $('[data-act="export"]').onclick = async () => {
     const data = { app: 'boekscanner', version: 1, exportedAt: new Date().toISOString(), books: await db.all('books'), pages: (await db.all('pages')).map(({ image, scan, figures, ...p }) => p) };
@@ -1752,6 +1759,82 @@ async function viewBackup() {
   };
   $('[data-act="import"]').onclick = () => { importInput.value = ''; importInput.click(); };
 }
+
+/* ---------- Claude-modus (instellingen) ---------- */
+
+const privacyText = () => (claudeSettings.active()
+  ? 'De Claude-modus staat aan: elke opname gaat naar Anthropic (de maker van Claude) om de tekst te lezen. Je boeken en teksten blijven verder op deze computer.'
+  : `Boekscanner werkt offline. De tekstherkenning gebeurt op ${PHONE ? 'je telefoon' : 'je computer'}; er wordt niets verstuurd.`);
+
+const centsLabel = (c) => (c < 1 ? c.toFixed(2).replace('.', ',') : String(c).replace('.', ','));
+
+function claudeSection() {
+  const c = claudeSettings.get();
+  return `
+      <hr class="rule">
+      <h2 class="h2">Tekstherkenning</h2>
+      <div class="stack" id="claude">
+        <label class="choice"><input type="radio" name="engine" value="local" ${c.on ? '' : 'checked'}> <span><strong>Op deze computer</strong> (gratis, werkt offline). Goed bij gewone pagina's; bij kolommen, foto's en lichtvlekken moet je meer nakijken.</span></label>
+        <label class="choice"><input type="radio" name="engine" value="claude" ${c.on ? 'checked' : ''}> <span><strong>Met Claude</strong> (nauwkeurig, kost een paar cent per pagina). Leest kolommen in de goede volgorde en zet beelden met bijschrift op hun plek. <strong>Je foto's gaan dan naar Anthropic.</strong></span></label>
+        <div class="stack" id="claude-opts" ${c.on ? '' : 'hidden'}>
+          <label class="field"><span>Je API-sleutel</span>
+            <input type="password" id="claude-key" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(c.key)}"></label>
+          <label class="field"><span>Model</span>
+            <select id="claude-model">${MODELS.map(m => `<option value="${m.id}" ${m.id === c.model ? 'selected' : ''}>${esc(m.label)}, ongeveer ${centsLabel(m.cents)} cent per pagina</option>`).join('')}</select></label>
+          <p class="muted small" id="claude-cost"></p>
+          <div><button class="btn btn-quiet" data-act="claude-test">Sleutel testen</button> <span class="muted small" id="claude-state"></span></div>
+          <details class="muted small"><summary>Hoe kom ik aan een API-sleutel?</summary>
+            <ol>
+              <li>Ga naar <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> en maak een account. Dat staat los van een Claude-abonnement.</li>
+              <li>Kies <strong>Billing</strong> en zet er tegoed op, bijvoorbeeld $5. Onder <strong>Limits</strong> kun je een maandlimiet zetten.</li>
+              <li>Kies <strong>API keys</strong> › <strong>Create key</strong>, noem hem bijvoorbeeld "Boekscanner" en kopieer de sleutel.</li>
+              <li>Plak hem hierboven. Hij wordt alleen in deze browser op deze computer bewaard en gaat nergens anders heen dan naar Anthropic.</li>
+            </ol>
+          </details>
+        </div>
+      </div>`;
+}
+
+function wireClaude() {
+  const opts = $('#claude-opts'), key = $('#claude-key'), model = $('#claude-model'), state = $('#claude-state');
+  const cost = () => {
+    const m = MODELS.find(x => x.id === model.value) || MODELS[0];
+    const book = m.cents * 3;   // 300 pagina's, in dollar
+    $('#claude-cost').textContent = `Een boek van 300 pagina's kost zo ongeveer $${book < 1 ? book.toFixed(2) : Math.round(book)}. Lukt Claude even niet (geen internet, sleutel fout), dan leest de computer die opname zelf.`;
+  };
+  const save = () => {
+    claudeSettings.set({ key: key.value.trim(), model: model.value });
+    $('#privacy').textContent = privacyText();
+  };
+  $('#claude').addEventListener('change', (e) => {
+    if (e.target.name === 'engine') {
+      const on = e.target.value === 'claude';
+      claudeSettings.set({ on });
+      opts.hidden = !on;
+      $('#privacy').textContent = privacyText();
+      if (on && !key.value.trim()) { state.textContent = 'Vul eerst je API-sleutel in.'; key.focus(); }
+      else toast(on ? 'Claude leest vanaf nu de opnames' : 'De computer leest vanaf nu zelf');
+    }
+    if (e.target === model) { save(); cost(); }
+  });
+  key.addEventListener('input', () => { save(); state.textContent = ''; });
+  $('[data-act="claude-test"]').onclick = async () => {
+    save();
+    if (!key.value.trim()) { state.textContent = 'Vul eerst je API-sleutel in.'; return; }
+    state.textContent = 'Testen…';
+    try { await testKey(key.value.trim(), model.value); state.textContent = '✓ De sleutel werkt.'; }
+    catch (err) { console.warn(err); state.textContent = explain(err); }
+  };
+  cost();
+}
+
+// Lukt het lezen met Claude niet, dan zeggen we dat (hoogstens eens per halve minuut).
+let claudeWarned = 0;
+window.addEventListener('claude-fout', (e) => {
+  if (Date.now() - claudeWarned < 30000) return;
+  claudeWarned = Date.now();
+  toast(e.detail + ' De computer leest zelf.');
+});
 
 importInput.addEventListener('change', async () => {
   const f = importInput.files?.[0];
