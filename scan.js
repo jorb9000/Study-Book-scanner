@@ -246,14 +246,16 @@ export function warpPage(img, quad) {
 /** Deelt elk pixel door de lokale achtergrond, zodat papier wit en inkt zwart wordt.
     Haalt schaduwen, vignettering en donkere randen weg. Met invert: true wordt lichte tekst op een
     donkere ondergrond (omslag, gekleurd kader) juist donker op wit. */
+export const GLARE = { on: true, bg: 245, cmin: 0.12, cmax: 0.45, target: 0.8, max: 5 };
 export function normalizeLight({ g, W, H }, { invert = false } = {}) {
   const px = invert ? (i) => 255 - g[i] : (i) => g[i];
   const B = Math.max(16, Math.round(Math.max(W, H) / 60));
   const gw = Math.ceil(W / B), gh = Math.ceil(H / B);
-  const grid = new Float32Array(gw * gh);
+  const grid = new Float32Array(gw * gh), lo = new Float32Array(gw * gh).fill(255);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const k = ((y / B) | 0) * gw + ((x / B) | 0), v = px(y * W + x);
     if (v > grid[k]) grid[k] = v;
+    if (v < lo[k]) lo[k] = v;
   }
   const sm = new Float32Array(gw * gh);
   for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
@@ -264,6 +266,32 @@ export function normalizeLight({ g, W, H }, { invert = false } = {}) {
     }
     sm[y * gw + x] = Math.max(sum / n, 1);
   }
+  // Lichtvlek van de lamp: het papier is overbelicht (bijna 255) en de inkt is daar lichtgrijs
+  // (zo'n 160–190 in plaats van 60). Alleen daar het verschil met het papier oprekken; elders
+  // (foto's, schaduw, gewone tekst) blijft alles zoals het was.
+  const gain = new Float32Array(gw * gh).fill(1);
+  if (!invert && GLARE.on) for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    let m = 1, bgMin = 255;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const yy = y + dy, xx = x + dx;
+      if (yy < 0 || yy >= gh || xx < 0 || xx >= gw) continue;
+      const k = yy * gw + xx;
+      bgMin = Math.min(bgMin, grid[k]);
+    }
+    m = lo[y * gw + x] / sm[y * gw + x];
+    const c = 1 - m;   // contrast in dit blok: 0 = leeg papier, ~0,75 = gewone zwarte tekst
+    if (bgMin >= GLARE.bg && c > GLARE.cmin && c < GLARE.cmax) gain[y * gw + x] = Math.min(GLARE.max, GLARE.target / c);
+  }
+  const smg = new Float32Array(gw * gh);
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    let sum = 0, n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const yy = y + dy, xx = x + dx;
+      if (yy >= 0 && yy < gh && xx >= 0 && xx < gw) { sum += gain[yy * gw + xx]; n++; }
+    }
+    smg[y * gw + x] = sum / n;
+  }
+  const gainAt = (x, y) => smg[Math.min(gh - 1, y) * gw + Math.min(gw - 1, x)];
   const out = new Uint8ClampedArray(W * H);
   const at = (x, y) => sm[Math.min(gh - 1, y) * gw + Math.min(gw - 1, x)];
   for (let y = 0; y < H; y++) {
@@ -271,7 +299,8 @@ export function normalizeLight({ g, W, H }, { invert = false } = {}) {
     for (let x = 0; x < W; x++) {
       const fx = clamp(x / B - 0.5, 0, gw - 1), x0 = fx | 0, tx = fx - x0;
       const bg = (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty) + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
-      const v = px(y * W + x) / bg; // 1 = papier
+      const gn = (gainAt(x0, y0) * (1 - tx) + gainAt(x0 + 1, y0) * tx) * (1 - ty) + (gainAt(x0, y0 + 1) * (1 - tx) + gainAt(x0 + 1, y0 + 1) * tx) * ty;
+      const v = gn === 1 ? px(y * W + x) / bg : 1 - (1 - Math.min(1, px(y * W + x) / bg)) * gn; // 1 = papier
       out[y * W + x] = v >= 0.9 ? 255 : Math.max(0, (v - 0.35) / 0.55) * 255;
     }
   }
@@ -423,7 +452,7 @@ export function foldLine({ g, W, H }, range = null) {
   const nb = 30, bh = Math.floor(H / nb);
   if (bh < 3 || W < 100) return null;
   const w = Math.max(2, Math.round(W * 0.03));
-  const votes = new Float64Array(W);
+  const votes = new Float64Array(W), cnt = new Float64Array(W);
   const col = new Uint8Array(bh), P = new Float64Array(W), Q = new Float64Array(W);
   const k = Math.floor(bh * 0.8);
   for (let b = 0; b < nb; b++) {
@@ -440,12 +469,19 @@ export function foldLine({ g, W, H }, range = null) {
       const side = Math.min(ml, mr);
       if (side < 110) continue;
       const dip = side / Math.max(1, Q[x]) - 1;
-      if (dip > 0.03) votes[x] += Math.min(dip, 0.3);
+      if (dip > 0.03) { votes[x] += Math.min(dip, 0.3); cnt[x]++; }
     }
   }
+  // De rug loopt van boven tot onder door; een mast of de rand van een foto maar over een paar
+  // stroken (al is dat dal daar wel dieper). Kies dus het diepste dal onder de dalen die in
+  // minstens half zoveel stroken terugkomen als het meest doorlopende dal.
+  const sum5 = (a, x) => a[x - 2] + a[x - 1] + a[x] + a[x + 1] + a[x + 2];
+  let cmax = 0;
+  for (let x = 2; x < W - 2; x++) cmax = Math.max(cmax, sum5(cnt, x));
   let best = -1, bv = 0;
   for (let x = 2; x < W - 2; x++) {
-    const v = votes[x - 2] + votes[x - 1] + votes[x] + votes[x + 1] + votes[x + 2];
+    if (sum5(cnt, x) < cmax * 0.5) continue;
+    const v = sum5(votes, x);
     if (v > bv) { bv = v; best = x; }
   }
   // Minstens in een paar stroken een duidelijk dal (5 × 0,3 per strook is het maximum).

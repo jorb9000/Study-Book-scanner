@@ -220,9 +220,16 @@ function splitAtGaps(l, gaps) {
     const p = w.slice(s, c); s = c;
     if (!p.length) continue;
     const text = p.map(x => x.text).join(' ');
+    // Een los stuk met weinig zekerheid is meestal ruis (foto of lichtvlek die aan een goede
+    // regel vastgeplakt zat); dezelfde regel als voor hele regels in collectLines.
+    const pc = p.reduce((a, x) => a + x.confidence, 0) / p.length;
+    if (pc < 50 || (p.length <= 2 && pc < 70 && !isPageNum(text))) {
+      if (globalThis.__dbg) console.log('[ocr] stuk weg', Math.round(pc), text.slice(0, 40));
+      continue;
+    }
     parts.push({
       ...l, ws: p, text, styled: styleWords(p), words: p.length,
-      conf: p.reduce((a, x) => a + x.confidence, 0) / p.length,
+      conf: pc,
       bullet: l.bullet && !parts.length,
       x0: p[0].bbox.x0, x1: p[p.length - 1].bbox.x1,
       y0: Math.min(...p.map(x => x.bbox.y0)), y1: Math.max(...p.map(x => x.bbox.y1)),
