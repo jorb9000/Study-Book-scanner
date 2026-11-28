@@ -71,6 +71,13 @@ try {
   check(!(await desk.locator('#zoom').getAttribute('class')).includes('btn-on'), 'inzoomen staat bij start uit');
   await desk.waitForTimeout(3000);
   check(await desk.locator('[data-act=open-shot]').count() === 0, 'zonder aanzetten geen automatische opname');
+  check(!(await desk.locator('#fix').getAttribute('class')).includes('btn-on'), 'rechtzetten staat bij start uit');
+  await desk.keyboard.press('KeyS');
+  await desk.waitForTimeout(2500);
+  const fixTxt = await desk.locator('#fix-state').innerText().catch(() => '');
+  check((await desk.locator('#fix').getAttribute('class')).includes('btn-on') && /scheef|recht/.test(fixTxt), `rechtzetten aan (${fixTxt})`);
+  await desk.screenshot({ path: join(out, 'flow-rechtzetten.png') });
+  await desk.keyboard.press('KeyS');
   await desk.click('#auto');   // nu pas automatisch opnemen
   const rows = () => desk.locator('[data-act=open-shot]').count();
   const t0 = Date.now();

@@ -3,7 +3,7 @@ const VERSION = 'v14';
 const SHELL = `boekscanner-shell-${VERSION}`;
 const OCR = 'boekscanner-ocr-v1';
 const FILES = [
-  './', 'index.html', 'style.css', 'app.js', 'ocr.js', 'ocr-client.js', 'ocr-worker.js', 'scan.js', 'figures.js', 'figure-ui.js', 'export.js', 'koppel.js', 'lamp.html', 'lamp.js', 'manifest.webmanifest',
+  './', 'index.html', 'style.css', 'app.js', 'ocr.js', 'ocr-client.js', 'ocr-worker.js', 'scan.js', 'perspective.js', 'figures.js', 'figure-ui.js', 'export.js', 'koppel.js', 'lamp.html', 'lamp.js', 'manifest.webmanifest',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
   'vendor/tesseract/tesseract.min.js', 'vendor/tesseract/worker.min.js',
   'vendor/peerjs/peerjs.min.js', 'vendor/qrcode/qrcode.js',
