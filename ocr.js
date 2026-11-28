@@ -130,8 +130,12 @@ function collectLines(blocks) {
       || x.confidence < 25;
     // Het opsommingsteken zelf hoort niet in de tekst (de regel wordt een '- ' opsomming).
     if (bullet) w = w.slice(1);
-    while (w.length && junk(w[0])) w.shift();
-    while (w.length && junk(w[w.length - 1])) w.pop();
+    // Een lang woord in een verder goed gelezen regel blijft staan, ook als Tesseract er zelf aan twijfelt
+    // (bv. "'egenwoordig" met 0%): beter een woord met één verkeerde letter dan een gat in de zin.
+    const solid = w.length >= 5 && w.filter(x => x.confidence >= 85).length >= w.length - 1;
+    const keepLong = (x) => solid && (x.text.match(/\p{Ll}/gu) || []).length >= 5;
+    while (w.length && junk(w[0]) && !keepLong(w[0])) w.shift();
+    while (w.length && junk(w[w.length - 1]) && !keepLong(w[w.length - 1])) w.pop();
     if (!w.length) continue;
     const rh = l.rowAttributes?.rowHeight || median(w.map(x => x.bbox.y1 - x.bbox.y0));
     // Losse tekentjes ver van de rest (schaduw, rand van de pagina) weglaten.
@@ -157,21 +161,62 @@ function collectLines(blocks) {
   return reorder(lines.filter(l => !noise(l)));
 }
 
+/** Zoekt tekstkolommen: stroken die geen enkele regel (op een enkele kop na) oversteekt.
+    Geeft de tussenruimtes terug als [{ a, b }] (van links naar rechts), leeg bij één kolom. */
+function findColumnGaps(lines, size) {
+  const ls = lines.filter(l => l.words >= 2 && /\p{L}/u.test(l.text));
+  if (ls.length < 6 || !size) return [];
+  const minX = Math.min(...ls.map(l => l.x0)), maxX = Math.max(...ls.map(l => l.x1));
+  const bin = Math.max(2, size / 4), n = Math.ceil((maxX - minX) / bin) + 1;
+  const cov = new Uint16Array(n);
+  for (const l of ls) for (let i = Math.floor((l.x0 - minX) / bin); i <= Math.floor((l.x1 - minX) / bin); i++) cov[i]++;
+  const gaps = [];
+  let i = 0;
+  while (i < n) {
+    // Een tussenruimte: bijna geen regel loopt erdoorheen, vergeleken met de tekst ernaast.
+    const peakL = Math.max(0, ...cov.subarray(0, i)), peakR = Math.max(0, ...cov.subarray(i));
+    const low = Math.max(1, Math.floor(0.15 * Math.min(peakL, peakR)));
+    if (!(cov[i] <= low && peakL >= 4 && peakR >= 4)) { i++; continue; }
+    let j = i; while (j < n && cov[j] <= low) j++;
+    if (j < n && (j - i) * bin >= size * 0.6) gaps.push({ a: minX + i * bin, b: minX + j * bin });
+    i = j;
+  }
+  // Aan beide kanten moet een echte kolom staan: een paar regels van behoorlijke breedte.
+  const edges = [minX, ...gaps.flatMap(g => [g.a, g.b]), maxX];
+  const ok = gaps.filter((g, k) => [[edges[2 * k], g.a], [g.b, edges[2 * k + 3]]].every(([x0, x1]) =>
+    x1 - x0 >= size * 4 && ls.filter(l => l.words >= 3 && l.x0 >= x0 - size && l.x1 <= x1 + size).length >= 3));
+  return ok;
+}
+
 /** Tesseract knipt regels op een kromme of onscherpe pagina soms in stukken, verdeeld over
-    verschillende blokken, waardoor de volgorde niet meer klopt. Stukken op dezelfde hoogte
-    worden weer één regel; bij één tekstkolom komen de regels daarna gewoon van boven naar beneden. */
+    verschillende blokken, waardoor de volgorde niet meer klopt. Stukken op dezelfde hoogte in dezelfde
+    kolom worden weer één regel. Bij één tekstkolom komen de regels daarna van boven naar beneden; bij
+    meer kolommen kolom voor kolom, met koppen die over meer kolommen lopen ertussen. */
 function reorder(lines) {
   if (lines.length < 3) return lines;
+  const size = median(lines.filter(l => l.words >= 4).map(l => l.size));
+  const gaps = findColumnGaps(lines, size);
+  // Kolom van een regel, of -1 als hij over een tussenruimte heen loopt (of geen letters heeft).
+  const colOf = (l) => {
+    if (!/\p{L}/u.test(l.text)) return -1;
+    let c = 0;
+    for (const g of gaps) { if (l.x0 < g.a && l.x1 > g.b) return -1; if (l.x0 >= (g.a + g.b) / 2) c++; }
+    return c;
+  };
   const vOverlap = (a, b) => Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
   const sorted = [...lines].sort((a, b) => a.x0 - b.x0);
-  const out = [];
+  const out = [], owner = new Map();
   for (const l of sorted) {
-    const h = l.y1 - l.y0;
+    const h = l.y1 - l.y0, cl = colOf(l);
     const m = out.find(o => {
       const gap = l.x0 - o.x1;
-      return vOverlap(o, l) > 0.6 * Math.min(h, o.y1 - o.y0) && gap > -o.size * 0.5 && gap < Math.max(o.size, l.size) * 2.5;
+      if (vOverlap(o, l) <= 0.6 * Math.min(h, o.y1 - o.y0) || gap <= -o.size * 0.5) return false;
+      // Niet over de ruimte tussen twee kolommen heen plakken, behalve stukken van een grote kop.
+      if (gaps.length && colOf(o) !== cl) return Math.min(o.size, l.size) >= size * 1.3 && gap < Math.max(o.size, l.size) * 1.5;
+      return gap < Math.max(o.size, l.size) * 2.5;
     });
-    if (!m) { out.push({ ...l }); continue; }
+    if (!m) { const o = { ...l }; out.push(o); owner.set(l, o); continue; }
+    owner.set(l, m);
     const n = m.words + l.words;
     m.conf = (m.conf * m.words + l.conf * l.words) / n;
     if (l.words > m.words) m.block = l.block;
@@ -180,12 +225,34 @@ function reorder(lines) {
     m.words = n; m.x1 = Math.max(m.x1, l.x1);
     m.y0 = Math.min(m.y0, l.y0); m.y1 = Math.max(m.y1, l.y1);
   }
+  const yc = (l) => l.y0 + l.y1;
+  if (gaps.length) {
+    if (globalThis.__dbg) console.log('[ocr] kolommen', gaps.map(g => `${Math.round(g.a)}-${Math.round(g.b)}`).join(' '));
+    // Regels over de volle breedte (koppen) delen de pagina in banden; per band kolom voor kolom.
+    const span = out.filter(l => colOf(l) < 0).sort((a, b) => yc(a) - yc(b));
+    const inCols = out.filter(l => colOf(l) >= 0);
+    const res = [];
+    let band = 0;
+    for (let k = 0; k <= span.length; k++) {
+      const top = k ? yc(span[k - 1]) : -Infinity, bottom = k < span.length ? yc(span[k]) : Infinity;
+      let first = true;
+      for (let c = 0; c <= gaps.length; c++) {
+        const col = inCols.filter(l => colOf(l) === c && yc(l) > top && yc(l) <= bottom).sort((a, b) => yc(a) - yc(b));
+        col.forEach((l, i) => { l.block = `k${band}-${c}`; l.newCol = i === 0 && !first; });
+        if (col.length) first = false;
+        res.push(...col);
+      }
+      band++;
+      if (k < span.length) { span[k].block = `s${k}`; res.push(span[k]); }
+    }
+    return res;
+  }
   const full = out.filter(l => l.words >= 4);
   if (full.length >= 5) {
     const c0 = median(full.map(l => l.x0)), c1 = median(full.map(l => l.x1));
     const inCol = (l) => Math.min(l.x1, c1) - Math.max(l.x0, c0) > 0.5 * (l.x1 - l.x0);
     if (full.filter(inCol).length >= full.length * 0.85) {
-      out.sort((a, b) => (a.y0 + a.y1) - (b.y0 + b.y1));
+      out.sort((a, b) => yc(a) - yc(b));
       // Eén kolom: Tesseracts blokindeling is dan willekeurig; alinea's volgen uit inspringen en witregels.
       const cnt = {};
       for (const l of out) cnt[l.block] = (cnt[l.block] || 0) + l.words;
@@ -194,8 +261,8 @@ function reorder(lines) {
       return out;
     }
   }
-  // Meer kolommen: Tesseracts volgorde aanhouden.
-  return lines.map(l => out.find(o => o.text.startsWith(l.text)) || null).filter((o, i, a) => o && a.indexOf(o) === i);
+  // Geen duidelijke kolommen (kaders, tabellen): Tesseracts volgorde aanhouden.
+  return lines.map(l => owner.get(l)).filter((o, i, a) => a.indexOf(o) === i);
 }
 
 /** Bouwt Markdown uit de regels die Tesseract vindt: alinea's, koppen, citaten en opsommingen.
@@ -267,7 +334,7 @@ export function buildText(blocks, { dropCaps = [], sparse = false, freq = null, 
     const chapterNo = /^\d{1,2}$/.test(l.text.trim()) && rel >= 1.35;
     const headingLike = l.words <= 14 && !/[,;]$/.test(l.text) && (letters >= 3 || chapterNo);
     const iPrev = lines.indexOf(l) - 1;
-    const spaceAbove = iPrev < 0 || l.y0 - lines[iPrev].y1 > gap * 1.3;
+    const spaceAbove = iPrev < 0 || l.newCol || l.y0 - lines[iPrev].y1 > gap * 1.3;
     if (rel >= 1.35 && headingLike) l.kind = rel >= 1.6 ? 'h2' : 'h3';
     else if (rel >= 1.18 && l.words <= 8 && headingLike && spaceAbove && !/[.!?]$/.test(l.text)) l.kind = 'h3';
     else if (l.bullet || LIST_RE.test(l.text)) l.kind = 'item';
@@ -316,10 +383,11 @@ export function buildText(blocks, { dropCaps = [], sparse = false, freq = null, 
         if (join && l.kind === 'h2') cur.kind = 'h2';
       } else if (sparse) {
         join = false;
-      } else if (l.kind === cur.kind && (l.kind === 'text' || l.kind === 'quote') && l.block === prev.block || (l.kind === 'text' && cur.kind === 'item' && l.indentL > 0.02)) {
+      } else if (l.kind === cur.kind && (l.kind === 'text' || l.kind === 'quote') && (l.block === prev.block || l.newCol) || (l.kind === 'text' && cur.kind === 'item' && l.indentL > 0.02)) {
+        // l.newCol: bovenaan de volgende kolom loopt de alinea van onder in de vorige kolom door.
         const m = l.m, width = l.width;
-        const short = prev.x1 < m.right - width * 0.1;
-        const indent = l.x0 > m.left + width * 0.03 && l.x0 - prev.x0 > width * 0.03;
+        const short = prev.x1 < (prev.m || m).right - (prev.width || width) * 0.1;
+        const indent = l.x0 > m.left + width * 0.03 && (l.newCol || l.x0 - prev.x0 > width * 0.03);
         join = !(short && /[.!?:;”"')\]]$/.test(prev.text)) && !bigGap && !(indent && short && cur.kind === 'text');
         if (short && prev.words <= 6 && !/[-,]$/.test(prev.text) && cur.kind === 'text' && cur.lines === 1) join = false;
       } else if (l.kind === 'center' && cur.kind === 'center') {
@@ -559,14 +627,15 @@ export async function prepareForOcr(blob) {
       steps.push(x0 > 0 || x1 < img.W ? "twee pagina's (rug binnen het boek)" : "twee pagina's");
     }
   }
-  const pages = halves.map(([g, p, ch]) => preparePage(g, p, steps, halves.length > 1, [...base, ...ch], src));
+  const pages = halves.map(([g, p, ch], i) => preparePage(g, p, steps, halves.length > 1 ? (i ? 'left' : 'right') : false, [...base, ...ch], src));
   return { pages, steps, canvas: pages[0].canvas };
 }
 
+// half: false bij één pagina, anders de kant van de rug ('left' of 'right').
 function preparePage(img, photo, steps, half = false, chain = [], src = null) {
   chain = [...chain];
   let smooth = null;
-  const cs = cropSides(img);
+  const cs = cropSides(img, { inner: half || null });
   if (cs.cropped) { img = cs.img; steps.push('buurpagina weg'); }
   let angle = estimateSkew(img);
   // Bij een open boek is het geheel al rechtgezet; een grote hoek per pagina is dan ruis (rand, tafel).
