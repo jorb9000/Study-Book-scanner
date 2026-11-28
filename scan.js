@@ -294,8 +294,9 @@ export function clearBorders({ g, W, H }) {
   return n;
 }
 
-/** Knipt smalle stroken tekst van de buurpagina aan de linker- en rechterrand weg. */
-export function cropSides(img) {
+/** Knipt smalle stroken tekst van de buurpagina aan de linker- en rechterrand weg.
+    inner: 'left' of 'right', de kant van de rug als de foto in twee pagina's is gesplitst. */
+export function cropSides(img, { inner = null } = {}) {
   const f = 4;
   const { g, W, H } = shrink(img, f);
   const col = new Float64Array(W);
@@ -314,7 +315,23 @@ export function cropSides(img) {
   if (segs.length < 2) return { img, cropped: false };
   const main = Math.max(...segs.map(([a, b]) => b - a));
   const edge = W * 0.03;
-  const keep = segs.filter(([a, b]) => !((b - a) < main * 0.25 && (a <= edge || b >= W - 1 - edge)));
+  // Rijen met inkt in een stuk kolommen.
+  const rows = (x0, x1) => { const r = new Uint8Array(H); for (let y = 0; y < H; y++) for (let x = Math.max(0, x0); x <= Math.min(W - 1, x1); x++) if (g[y * W + x] < 140) { r[y] = 1; break; } return r; };
+  // Een smalle strook aan de rand is de buurpagina, tenzij hij er vlak naast ligt en de regels gewoon
+  // doorlopen (het eind van de regels of een foto die tot de rug doorloopt, net achter een lichte plek).
+  const continues = (i) => {
+    const [a, b] = segs[i], left = a <= edge, nb = segs[left ? i + 1 : i - 1];
+    if (!nb) return false;
+    const gap = left ? nb[0] - b : a - nb[1];
+    if (gap >= W * 0.05) return false;
+    // Aan de kant van de rug (twee pagina's) is wat er vlak naast ligt nog deze pagina.
+    if (inner === (left ? 'left' : 'right')) return true;
+    const w = b - a, mine = rows(a, b), other = left ? rows(nb[0], nb[0] + w) : rows(nb[1] - w, nb[1]);
+    let n = 0, both = 0;
+    for (let y = 0; y < H; y++) if (mine[y]) { n++; if (other[y]) both++; }
+    return n > 0 && both / n >= 0.7;
+  };
+  const keep = segs.filter(([a, b], i) => !((b - a) < main * 0.25 && (a <= edge || b >= W - 1 - edge) && !continues(i)));
   if (keep.length === segs.length || !keep.length) return { img, cropped: false };
   const pad = Math.round(W * 0.015);
   // Wit maken in plaats van bijsnijden, zodat de afmetingen gelijk blijven.

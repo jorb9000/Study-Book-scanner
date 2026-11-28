@@ -227,5 +227,17 @@
    "prijs (euro)",
    "Aanbog"
   ]
+ },
+ "spread-kolommen": {
+  "words": "Wie gember of ginseng gebruikt zal al snel een associatie maken met China Verzamelaars als Witsen en de Haagse jurist Jean Theodore Royer Begin twintigste eeuw kwamen ook de Chinezen zelf naar Nederland",
+  "contains": [
+   "Heemskerk die strandden",
+   "aangelegenheid tot de Engelsen",
+   "volkenkundige musea in Leiden en Rotterdam"
+  ],
+  "notContains": [
+   "musea Ma Yansong",
+   "Heemskerk tot de Engelsen"
+  ]
  }
 }
