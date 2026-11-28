@@ -401,13 +401,6 @@ kbd { font: 12px var(--sans); padding: 1px 5px; border-radius: 4px; background: 
   .print-book ul, .print-book ol { margin: 0 0 7pt 18pt; padding: 0; }
 }
 
-/* Instellingen: tekstherkenning */
-.h2 { font-size: 18px; margin: 0 0 10px; }
-.choice { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; line-height: 1.45; cursor: pointer; }
-.choice input { margin-top: 4px; flex: none; }
-#claude-opts details ol { padding-left: 20px; margin: 8px 0 0; }
-#claude-opts input, #claude-opts select { font: inherit; padding: 9px 10px; border: 1px solid var(--line, #ccc); border-radius: 8px; background: var(--card, #fff); color: inherit; }
-
 .top-ver { font: 500 12px/1 var(--sans); color: var(--muted); margin: 0 auto 0 10px; white-space: nowrap; }
 .wordmark-ver { font: 500 12px/1 var(--sans); color: var(--muted); letter-spacing: 0; vertical-align: middle; margin-left: 4px; }
 
