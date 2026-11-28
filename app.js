@@ -185,7 +185,7 @@ async function viewPhone() {
   // Oude boeken van vóór de lampopstelling: via een back-up naar de computer verhuizen.
   render(`
     <section class="view">
-      <header class="top"><h1 class="wordmark">Boekscanner</h1></header>
+      <header class="top"><h1 class="wordmark">Boekscanner <span class="wordmark-ver">${esc(self.APP_VERSION || '')}</span></h1></header>
       <p class="lead">Deze iPhone is nu alleen nog camera op de lamp. Boeken, nakijken en exporteren doe je op je computer.</p>
       <p class="lead">Er ${n === 1 ? 'staat nog 1 boek' : `staan nog ${n} boeken`} op deze iPhone. Maak een back-up, zet het bestand in iCloud Drive en kies op je computer <strong>Back-up terugzetten</strong>.</p>
     </section>
@@ -266,7 +266,7 @@ async function viewHome() {
   render(`
     <section class="view">
       <header class="top">
-        <h1 class="wordmark">Boekscanner</h1>
+        <h1 class="wordmark">Boekscanner <span class="wordmark-ver">${esc(self.APP_VERSION || '')}</span></h1>
         <a class="icon-btn" href="#/backup" aria-label="Back-up en instellingen">${icon('more')}</a>
       </header>
 
@@ -1748,6 +1748,7 @@ async function viewBackup() {
       ${PHONE ? '' : claudeSection()}
       <hr class="rule">
       <p class="muted small" id="privacy">${privacyText()}</p>
+      <p class="muted small">Versie ${esc(self.APP_VERSION || 'onbekend')}</p>
     </section>
   `);
   if (!PHONE) wireClaude();
