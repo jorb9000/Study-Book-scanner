@@ -773,6 +773,28 @@ export function dewarp(img) {
   }
   // Lege kolommen aan het begin opvullen.
   for (let k = K - 2; k >= 0; k--) if (!lines.some(l => l.ok[k])) D[k].set(D[k + 1]);
+  // Een bladzijde buigt geleidelijk. Een sprong van een halve regel of meer tussen twee
+  // buurkolommen betekent dat daar een andere regel gevolgd is (vage tekst in de lichtvlek,
+  // kolomwit, paginarand): vanaf het midden naar buiten de laatste goede waarde vasthouden.
+  const jump = spacing * 0.5;
+  for (let yy = 0; yy < H; yy++) {
+    for (const dir of [1, -1]) {
+      let held = D[kr][yy];
+      for (let k = kr + dir; k >= 0 && k < K; k += dir) {
+        if (Math.abs(D[k][yy] - held) <= jump) { held = D[k][yy]; continue; }
+        // Hoe ver loopt het afwijkende stuk door?
+        let e = k + dir;
+        while (e >= 0 && e < K && Math.abs(D[e][yy] - D[e - dir][yy]) <= jump) e += dir;
+        const len = Math.abs(e - k), edge = e < 0 || e >= K;
+        if (len <= 3 || (edge && len <= K * 0.15)) {
+          for (let m = k; m !== e; m += dir) D[m][yy] = held;
+        } else held = D[k][yy];
+        k = e - dir;
+      }
+    }
+  }
+  maxOff = 0;
+  for (let k = 0; k < K; k++) for (let yy = y0; yy <= y1; yy++) maxOff = Math.max(maxOff, Math.abs(D[k][yy]));
   // Geen of een onwaarschijnlijk grote kromming (dan is er iets anders gevolgd dan tekstregels).
   if (maxOff < 1 || maxOff > spacing * 5) return { img, warped: false };
 
